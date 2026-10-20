@@ -14,7 +14,7 @@ from pathlib import Path
 import aiosqlite
 import yaml
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Query
 from fastapi.responses import (
     HTMLResponse, JSONResponse, PlainTextResponse, Response,
 )
@@ -732,6 +732,44 @@ async def get_usage():
 async def get_prospects():
     rows = await query_db("SELECT * FROM prospects ORDER BY created_at DESC LIMIT 200")
     return rows
+
+
+@app.get("/api/contacts/search")
+async def search_contacts(
+    q: str = Query("", max_length=200),
+    status: str = Query("", max_length=50),
+    industry: str = Query("", max_length=100),
+    verified: bool = False,
+    min_score: int = Query(0, ge=0, le=100),
+    sort: str = Query("newest", pattern="^(newest|score|name)$"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+):
+    """Search the entire local contact book, not just the latest 200 rows."""
+    clauses, params = ["score >= ?"], [min_score]
+    if q.strip():
+        # Literal substring matching: SQL wildcard characters are ordinary text.
+        clauses.append("instr(lower(first_name || ' ' || last_name || ' ' || "
+                       "company || ' ' || title || ' ' || email), lower(?)) > 0")
+        params.append(q.strip())
+    for field, value in (("status", status), ("industry", industry)):
+        if value:
+            clauses.append(f"{field} = ?")
+            params.append(value)
+    if verified:
+        clauses.append("email_verified = 1 AND email != ''")
+    where = " AND ".join(clauses)
+    totals = await query_db("SELECT COUNT(*) AS n FROM prospects WHERE " + where, tuple(params))
+    total = totals[0]["n"] if totals else 0
+    page = min(page, max(1, (total + page_size - 1) // page_size))
+    order = {"newest": "created_at DESC, id", "score": "score DESC, id",
+             "name": "first_name COLLATE NOCASE, last_name COLLATE NOCASE, id"}[sort]
+    items = await query_db("SELECT * FROM prospects WHERE " + where +
+                           " ORDER BY " + order + " LIMIT ? OFFSET ?",
+                           tuple(params) + (page_size, (page - 1) * page_size))
+    industries = await query_db("SELECT DISTINCT industry FROM prospects WHERE industry != '' ORDER BY industry")
+    return {"items": items, "total": total, "page": page, "page_size": page_size,
+            "industries": [r["industry"] for r in industries]}
 
 
 def _state():
@@ -1616,6 +1654,12 @@ async def static_file(path: str):
         media_type=TEXT_TYPES.get(target.suffix, "text/plain"),
         headers={"Cache-Control": "no-store"},
     )
+
+
+@app.get("/blueprint", response_class=HTMLResponse)
+async def product_blueprint():
+    """Isolated, synthetic product concepts; no provider or application writes."""
+    return (WEB_DIR / "blueprint.html").read_text(encoding="utf-8")
 
 
 @app.get("/", response_class=HTMLResponse)

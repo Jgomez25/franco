@@ -1,0 +1,16 @@
+{
+  "task_id": "P00",
+  "result": "incomplete",
+  "verification": "mocked",
+  "commit": "",
+  "reviewer": "",
+  "summary": "",
+  "tests": [{"command": "", "exit_code": null, "log": ""}],
+  "criteria": {
+    "P00-A1": {"result": "incomplete", "evidence": ""},
+    "P00-A2": {"result": "incomplete", "evidence": ""}
+  },
+  "provider_evidence": [],
+  "limitations": [],
+  "required_configuration": []
+}

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Franco — Command Deck</title>
+<title>Franco — Sales Workspace</title>
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
@@ -13,7 +13,7 @@
     <div class="mark">F</div>
     <div>
       <h1>Franco</h1>
-      <div class="tagline">Always Be Closing</div>
+      <div class="tagline">Your sales workspace</div>
     </div>
   </div>
   <div class="header-controls">
@@ -23,11 +23,12 @@
     </div>
     <button class="icon-btn" id="theme-btn" onclick="cycleTheme()"
             title="Appearance: follows your system until you pick one">auto</button>
+    <a class="refresh-btn" href="/blueprint">Product blueprint ↗</a>
     <button class="refresh-btn" onclick="loadCurrentTab()">Refresh</button>
   </div>
 </header>
 
-<nav>
+<nav aria-label="Workspace navigation">
   <button class="active" onclick="showTab('today', this)">Today<span class="nav-count" id="nav-today"></span></button>
   <button onclick="showTab('signals', this)">Signals<span class="nav-count" id="nav-signals"></span></button>
   <button onclick="showTab('discover', this)">Discover</button>
@@ -48,8 +49,13 @@
 <!-- Today: what needs a human -->
 <div id="today" class="section active">
   <div class="section-head">
-    <h2>Today</h2>
-    <p>Anything waiting on you, then everything Franco has built so far.</p>
+    <div class="eyebrow">YOUR WORKSPACE</div><h2>Make your next move.</h2>
+    <p>Find the right people. Start better conversations. Keep your pipeline moving.</p>
+  </div>
+  <div class="workspace-shortcuts">
+    <button onclick="showTab('discover')"><span>01 / FIND</span><strong>Discover your next customer <b>↗</b></strong><small>Turn your ideal customer profile into accounts.</small></button>
+    <button onclick="showTab('prospects')"><span>02 / QUALIFY</span><strong>Build a focused contact list <b>↗</b></strong><small>Search, filter, and prioritize your best prospects.</small></button>
+    <button onclick="showTab('outbox')"><span>03 / ENGAGE</span><strong>Make every message count <b>↗</b></strong><small>Review personalized outreach before it sends.</small></button>
   </div>
   <div class="today-grid">
     <div class="today-main">
@@ -152,7 +158,27 @@
     </div>
   </div>
   <div id="import-panel"></div>
+  <div class="contact-tools card">
+    <div class="contact-filters">
+      <label class="search-field">Search contacts<input id="contact-q" class="form-input" placeholder="Name, company, title, or email" oninput="queueContactSearch()"></label>
+      <label>Status<select id="contact-status" class="form-input" onchange="resetContactSearch()"><option value="">All statuses</option><option>new</option><option>contacted</option><option>replied</option><option>interested</option><option>meeting</option><option>not_interested</option><option>bounced</option></select></label>
+      <label>Industry<select id="contact-industry" class="form-input" onchange="resetContactSearch()"><option value="">All industries</option></select></label>
+      <label>Minimum score<input id="contact-score" class="form-input" type="number" min="0" max="100" value="0" onchange="resetContactSearch()"></label>
+      <label>Sort by<select id="contact-sort" class="form-input" onchange="resetContactSearch()"><option value="newest">Newest first</option><option value="score">Highest score</option><option value="name">Name A–Z</option></select></label>
+    </div>
+    <div class="contact-toolbar">
+      <label><input id="contact-verified" type="checkbox" onchange="resetContactSearch()"> Verified email only</label>
+      <button class="btn btn-secondary btn-sm" onclick="clearContactFilters()">Clear filters</button>
+      <label class="saved-label">Saved view<select id="contact-views" class="form-input" onchange="applyContactView()"><option value="">Choose a view</option></select></label>
+      <input id="contact-view-name" class="form-input" aria-label="New view name" placeholder="Name this view" maxlength="80" style="width:150px"><button class="btn btn-secondary btn-sm" onclick="saveContactView()">Save view</button>
+      <button class="btn btn-secondary btn-sm" onclick="deleteContactView()">Delete view</button>
+    </div>
+    <p class="muted">Saved views stay in this browser. Verified email is a data quality filter; sending still uses Franco’s approval and suppression checks.</p>
+  </div>
+  <div class="contact-toolbar"><span id="contact-count" role="status" aria-live="polite"></span><button id="contact-export" class="btn btn-primary btn-sm" onclick="exportContactSelection()" disabled>Export selected (0)</button></div>
   <div id="prospects-table"></div>
+  <div class="contact-pagination"><button id="contact-prev" class="btn btn-secondary" onclick="changeContactPage(-1)">Previous</button><span id="contact-page"></span><button id="contact-next" class="btn btn-secondary" onclick="changeContactPage(1)">Next</button></div>
+  <dialog id="contact-dialog" aria-labelledby="contact-detail-name"><form method="dialog"><button class="btn btn-secondary" aria-label="Close contact details">Close ×</button></form><div id="contact-detail"></div></dialog>
 </div>
 
 <!-- Campaigns -->
@@ -417,6 +443,7 @@
 
 </main>
 
+<script src="/static/contacts.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

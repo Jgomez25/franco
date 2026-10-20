@@ -1,0 +1,498 @@
+{
+  "schema_version": 1,
+  "tasks": [
+    {
+      "id": "P00",
+      "title": "Scope and benchmark",
+      "depends_on": [],
+      "context_files": [
+        "docs/APOLLO_COMPARISON.md",
+        "franco/dashboard.py"
+      ],
+      "status": "planned",
+      "deliverables": [
+        "Agree a written capability matrix: supported user roles, providers, markets, channels, volumes and explicit exclusions.",
+        "Define a 100-contact synthetic benchmark and measurable gates for duplicate handling, filter correctness, workflow timing and cost.",
+        "Expose explicit capability states: preview, unavailable, configured, degraded, live. Preserve localhost-only defaults."
+      ],
+      "acceptance": [
+        {
+          "id": "P00-A1",
+          "criterion": "Reject unsupported capability execution before any external request."
+        },
+        {
+          "id": "P00-A2",
+          "criterion": "Verify prototype fixtures cannot enter production outreach."
+        }
+      ],
+      "external_dependencies": []
+    },
+    {
+      "id": "P01",
+      "title": "Shared-service foundation",
+      "depends_on": [
+        "P00"
+      ],
+      "context_files": [
+        "franco/state.py",
+        "franco/dashboard.py",
+        "franco/paths.py"
+      ],
+      "status": "planned",
+      "deliverables": [
+        "Add workspace, user, membership, credential-reference, job, job-attempt and audit-event models with reversible deployment migration plan.",
+        "Server-enforce tenant scoping and rep/manager/admin permissions; retain separately tested local single-user mode.",
+        "Encrypt provider tokens through a managed secret boundary; rotate and revoke without logging secrets.",
+        "Implement durable jobs with leases, idempotency keys, retry budgets, backoff, dead-letter inspection and restart recovery."
+      ],
+      "acceptance": [
+        {
+          "id": "P01-A1",
+          "criterion": "Cross-tenant IDs and rep attempts to change credentials return denied."
+        },
+        {
+          "id": "P01-A2",
+          "criterion": "Kill a worker between provider acknowledgment and local commit; replay must not duplicate the side effect."
+        },
+        {
+          "id": "P01-A3",
+          "criterion": "Test expired credentials, revocation, recovery and secrets redaction."
+        }
+      ],
+      "external_dependencies": [
+        "Chosen provider contracts, sandbox credentials, or deployment decisions as applicable; never invent them."
+      ]
+    },
+    {
+      "id": "P02",
+      "title": "Licensed data and enrichment",
+      "depends_on": [
+        "P01"
+      ],
+      "context_files": [
+        "franco/collectors/discover.py",
+        "franco/integrations/email_finder.py",
+        "franco/models/prospect.py",
+        "franco/state.py",
+        "franco/web/contacts.js"
+      ],
+      "status": "planned",
+      "deliverables": [
+        "Implement a provider-neutral search/enrich/verify interface with deterministic fake adapter and one chosen licensed provider.",
+        "Store field-level provenance, provider record IDs, collection/verification timestamps, confidence and allowed uses.",
+        "Implement canonical identity resolution, duplicate merge preview, refresh jobs and suppression propagation.",
+        "Reserve credits before requests, enforce per-job cap, settle actual spend, and stop waterfall at the configured quality threshold."
+      ],
+      "acceptance": [
+        {
+          "id": "P02-A1",
+          "criterion": "Overlapping provider records merge without losing source attribution."
+        },
+        {
+          "id": "P02-A2",
+          "criterion": "429, timeout, invalid fields and exhausted credits produce explicit retriable or terminal states."
+        },
+        {
+          "id": "P02-A3",
+          "criterion": "No verified label without verification evidence; stale records remain visibly stale."
+        },
+        {
+          "id": "P02-A4",
+          "criterion": "Contract tests pass with fake adapter; live sandbox evidence is separately recorded."
+        }
+      ],
+      "external_dependencies": [
+        "Chosen provider contracts, sandbox credentials, or deployment decisions as applicable; never invent them."
+      ]
+    },
+    {
+      "id": "P03",
+      "title": "Multi-channel sequence engine",
+      "depends_on": [
+        "P01",
+        "P02"
+      ],
+      "context_files": [
+        "franco/models/campaign.py",
+        "franco/outreach.py",
+        "franco/gate.py",
+        "franco/agents/sender.py",
+        "franco/web/app.js"
+      ],
+      "status": "planned",
+      "deliverables": [
+        "Persist draft/revision/enrollment/step-run models; adapt existing campaigns without duplicating send logic.",
+        "Support email, call task and manual social task with delays, timezone windows, pause/resume and per-revision approval.",
+        "Implement edit invalidation, sender limits, reply/bounce/opt-out cancellation and retry-safe dispatch through existing gate."
+      ],
+      "acceptance": [
+        {
+          "id": "P03-A1",
+          "criterion": "DST change and weekend delays produce correct next-run times."
+        },
+        {
+          "id": "P03-A2",
+          "criterion": "Suppression or reply arriving immediately before dispatch prevents send."
+        },
+        {
+          "id": "P03-A3",
+          "criterion": "Restart after dispatch cannot duplicate mail; edits invalidate prior approval."
+        },
+        {
+          "id": "P03-A4",
+          "criterion": "Builder preview matches stored canonical sequence and handles invalid or empty steps."
+        }
+      ],
+      "external_dependencies": [
+        "Chosen provider contracts, sandbox credentials, or deployment decisions as applicable; never invent them."
+      ]
+    },
+    {
+      "id": "P04",
+      "title": "Telephony and call workspace",
+      "depends_on": [
+        "P01",
+        "P02",
+        "P03"
+      ],
+      "context_files": [
+        "franco/integrations/",
+        "franco/models/conversation.py"
+      ],
+      "status": "planned",
+      "deliverables": [
+        "Add telephony adapter, short-lived client sessions, call attempts, dispositions and signed event ingestion.",
+        "Start with single-line calling; add concurrent dialing only after provider policy, abandonment behavior and user controls are specified.",
+        "Define recording consent policy, access, retention, deletion and transcript permissions before enabling recording."
+      ],
+      "acceptance": [
+        {
+          "id": "P04-A1",
+          "criterion": "Duplicate/out-of-order callbacks converge on one correct call state."
+        },
+        {
+          "id": "P04-A2",
+          "criterion": "Invalid webhook signatures, unauthorized calls and blocked numbers are denied."
+        },
+        {
+          "id": "P04-A3",
+          "criterion": "Call cancel, no answer, disconnected agent and provider outage are exercised."
+        },
+        {
+          "id": "P04-A4",
+          "criterion": "Sandbox call and transcript tests are separately marked from mocked tests."
+        }
+      ],
+      "external_dependencies": [
+        "Chosen provider contracts, sandbox credentials, or deployment decisions as applicable; never invent them."
+      ]
+    },
+    {
+      "id": "P05",
+      "title": "CRM sync",
+      "depends_on": [
+        "P01",
+        "P02"
+      ],
+      "context_files": [
+        "franco/integrations/",
+        "franco/models/company.py",
+        "franco/models/prospect.py"
+      ],
+      "status": "planned",
+      "deliverables": [
+        "Implement one selected CRM OAuth adapter first, with minimum scopes and tenant-bound refresh tokens.",
+        "Persist connection, external record map, field mapping, sync cursor, conflict and sync run.",
+        "Support preview diffs, per-field source of truth, tombstones, conflict review and incremental bidirectional sync."
+      ],
+      "acceptance": [
+        {
+          "id": "P05-A1",
+          "criterion": "Duplicate webhook and retry do not create duplicate contacts."
+        },
+        {
+          "id": "P05-A2",
+          "criterion": "Remote deletion is not silently resurrected; merge and null-clearing semantics are tested."
+        },
+        {
+          "id": "P05-A3",
+          "criterion": "Revoked token stops sync without losing cursor."
+        },
+        {
+          "id": "P05-A4",
+          "criterion": "Rate limits and partial batch failure resume correctly."
+        }
+      ],
+      "external_dependencies": [
+        "Chosen provider contracts, sandbox credentials, or deployment decisions as applicable; never invent them."
+      ]
+    },
+    {
+      "id": "P06",
+      "title": "Inbound capture and assignment",
+      "depends_on": [
+        "P01",
+        "P02",
+        "P03"
+      ],
+      "context_files": [
+        "franco/dashboard.py",
+        "franco/importer.py",
+        "franco/state.py"
+      ],
+      "status": "planned",
+      "deliverables": [
+        "Build versioned forms, field schemas, hosted ingestion boundary, consent metadata, spam controls and idempotent submission ingestion.",
+        "Persist assignment rules, owner capacity and routing decisions; preview rules before activation.",
+        "Specify round-robin fairness, fallback ownership and notifications; approval still applies to outreach."
+      ],
+      "acceptance": [
+        {
+          "id": "P06-A1",
+          "criterion": "Malformed and spam submissions never enter outreach."
+        },
+        {
+          "id": "P06-A2",
+          "criterion": "Concurrent submissions preserve assignment fairness and deduplicate by ingestion key."
+        },
+        {
+          "id": "P06-A3",
+          "criterion": "Rule changes retain the historical explanation for existing assignments."
+        }
+      ],
+      "external_dependencies": [
+        "Chosen provider contracts, sandbox credentials, or deployment decisions as applicable; never invent them."
+      ]
+    },
+    {
+      "id": "P07",
+      "title": "Meetings scheduler",
+      "depends_on": [
+        "P01",
+        "P05"
+      ],
+      "context_files": [
+        "franco/integrations/calendar.py",
+        "franco/models/conversation.py"
+      ],
+      "status": "planned",
+      "deliverables": [
+        "Implement calendar OAuth adapter, availability schedules, event type, buffers, booking holds and confirmed/cancelled/rescheduled states.",
+        "Use timezone-aware timestamps and atomic conflict-safe reservations with compensating provider cancellation.",
+        "Implement round-robin availability and revocation handling."
+      ],
+      "acceptance": [
+        {
+          "id": "P07-A1",
+          "criterion": "Two simultaneous requests for one slot produce at most one confirmed booking."
+        },
+        {
+          "id": "P07-A2",
+          "criterion": "DST, differing attendee timezones, cancellation, provider timeout and retry are covered."
+        },
+        {
+          "id": "P07-A3",
+          "criterion": "Disconnected calendar never exposes stale availability as bookable."
+        }
+      ],
+      "external_dependencies": [
+        "Chosen provider contracts, sandbox credentials, or deployment decisions as applicable; never invent them."
+      ]
+    },
+    {
+      "id": "P08",
+      "title": "Deliverability and mailbox operations",
+      "depends_on": [
+        "P01",
+        "P03"
+      ],
+      "context_files": [
+        "franco/integrations/mail_provider.py",
+        "franco/integrations/gmail.py",
+        "franco/integrations/smtp_mail.py",
+        "franco/outreach.py"
+      ],
+      "status": "planned",
+      "deliverables": [
+        "Add mailbox health snapshots, DNS checks, provider events, sending budgets and pause decisions.",
+        "Define complaint/bounce denominators and windows; reconcile events with actual send IDs.",
+        "Expose operational runbooks; mailbox/domain procurement and any warming adapter remain disabled until separately configured and validated."
+      ],
+      "acceptance": [
+        {
+          "id": "P08-A1",
+          "criterion": "Hard bounce and complaint events cancel future sends and update suppression."
+        },
+        {
+          "id": "P08-A2",
+          "criterion": "Mailbox pause takes effect before queued dispatch, including races."
+        },
+        {
+          "id": "P08-A3",
+          "criterion": "Missing events are unknown health, not a fabricated green status."
+        },
+        {
+          "id": "P08-A4",
+          "criterion": "Per-mailbox and workspace budgets remain atomic under concurrent workers."
+        }
+      ],
+      "external_dependencies": [
+        "Chosen provider contracts, sandbox credentials, or deployment decisions as applicable; never invent them."
+      ]
+    },
+    {
+      "id": "P09",
+      "title": "Deals and conversation intelligence",
+      "depends_on": [
+        "P01",
+        "P04",
+        "P05"
+      ],
+      "context_files": [
+        "franco/models/conversation.py",
+        "franco/state.py",
+        "franco/brain.py"
+      ],
+      "status": "planned",
+      "deliverables": [
+        "Add pipeline, opportunity, stage history, activity association and owner models.",
+        "Persist transcripts with timestamped evidence; summaries and action items cite source spans and support correction.",
+        "Enforce recording/transcript retention and workspace permissions; stage transitions and CRM writes are explicit actions."
+      ],
+      "acceptance": [
+        {
+          "id": "P09-A1",
+          "criterion": "Deleted recordings/transcripts are removed from summaries/search according to policy."
+        },
+        {
+          "id": "P09-A2",
+          "criterion": "Unsupported summary claims are rejected or marked uncertain."
+        },
+        {
+          "id": "P09-A3",
+          "criterion": "Stage changes preserve actor, time, prior stage and external sync state."
+        }
+      ],
+      "external_dependencies": [
+        "Chosen provider contracts, sandbox credentials, or deployment decisions as applicable; never invent them."
+      ]
+    },
+    {
+      "id": "P10",
+      "title": "Analytics and reporting",
+      "depends_on": [
+        "P01",
+        "P03",
+        "P05",
+        "P07"
+      ],
+      "context_files": [
+        "franco/usage.py",
+        "franco/dashboard.py",
+        "franco/state.py"
+      ],
+      "status": "planned",
+      "deliverables": [
+        "Define canonical event envelope and immutable ingest with deduplication, event time and arrival time.",
+        "Build cohort reports for delivered mail, unique replies, positive replies, meetings, opportunities and costs with explicit denominators.",
+        "Support saved dashboards, filters, permission-scoped exports and late-event reconciliation."
+      ],
+      "acceptance": [
+        {
+          "id": "P10-A1",
+          "criterion": "Fixture events with duplicates, late arrivals and cancelled meetings yield exact expected totals."
+        },
+        {
+          "id": "P10-A2",
+          "criterion": "Date boundaries, timezones and empty cohorts do not divide by zero or misattribute conversions."
+        },
+        {
+          "id": "P10-A3",
+          "criterion": "UI labels and downloaded reports use the same metric definitions."
+        }
+      ],
+      "external_dependencies": [
+        "Chosen provider contracts, sandbox credentials, or deployment decisions as applicable; never invent them."
+      ]
+    },
+    {
+      "id": "P11",
+      "title": "Browser extension",
+      "depends_on": [
+        "P01",
+        "P02",
+        "P05"
+      ],
+      "context_files": [
+        "franco/dashboard.py",
+        "franco/importer.py"
+      ],
+      "status": "planned",
+      "deliverables": [
+        "Build a separate extension package with minimum host permissions and explicit user-triggered capture.",
+        "Show selected fields and source URLs before saving; use authenticated tenant-scoped API and deduplication preview.",
+        "Keep credentials out of page/content-script context; implement token revoke and signed release process."
+      ],
+      "acceptance": [
+        {
+          "id": "P11-A1",
+          "criterion": "Untrusted page content cannot issue privileged commands or capture extra tabs."
+        },
+        {
+          "id": "P11-A2",
+          "criterion": "Unsupported page, revoked token and duplicate contact have clear UI states."
+        },
+        {
+          "id": "P11-A3",
+          "criterion": "Capture requires user action and preserves field provenance."
+        }
+      ],
+      "external_dependencies": [
+        "Chosen provider contracts, sandbox credentials, or deployment decisions as applicable; never invent them."
+      ]
+    },
+    {
+      "id": "P12",
+      "title": "Grounded AI workspace",
+      "depends_on": [
+        "P01",
+        "P02",
+        "P03",
+        "P09"
+      ],
+      "context_files": [
+        "franco/brain.py",
+        "franco/gate.py",
+        "franco/agents/",
+        "prompts/"
+      ],
+      "status": "planned",
+      "deliverables": [
+        "Define read-only research tools and schema-validated action proposals with provenance, model version and per-task cost cap.",
+        "Reuse existing drafting/approval pipeline; writes require actor, tenant, approved plan and current revision.",
+        "Add a fixed evaluation dataset for factual grounding, prompt injection, unsafe side effects and budget exhaustion."
+      ],
+      "acceptance": [
+        {
+          "id": "P12-A1",
+          "criterion": "Imported webpages or CRM notes cannot override tool authorization."
+        },
+        {
+          "id": "P12-A2",
+          "criterion": "Every external action is denied without valid current approval."
+        },
+        {
+          "id": "P12-A3",
+          "criterion": "Budget exhaustion and malformed model output fail visibly without fallback side effects."
+        },
+        {
+          "id": "P12-A4",
+          "criterion": "Report evaluation pass rates and known failure classes, not just screenshots."
+        }
+      ],
+      "external_dependencies": [
+        "Chosen provider contracts, sandbox credentials, or deployment decisions as applicable; never invent them."
+      ]
+    }
+  ]
+}
