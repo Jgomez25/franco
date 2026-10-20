@@ -35,7 +35,7 @@ STATES = (PREVIEW, UNAVAILABLE, CONFIGURED, DEGRADED, LIVE)
 EXECUTABLE = frozenset({CONFIGURED, DEGRADED, LIVE})
 
 LIVE_WINDOW_DAYS = 30
-MATRIX_VERSION = "2026-10-20.draft"
+MATRIX_VERSION = "2026-10-20.owner-decisions"
 
 
 @dataclass(frozen=True)
@@ -109,7 +109,6 @@ _STATIC: tuple[Capability, ...] = (
     Capability("training.cloudflare", "Cloudflare deep crawling for training", "training", True,
                env_keys=("cloudflare_account_id", "cloudflare_api_token")),
     # Blueprint-only: simulated in franco/web/blueprint.*, no production code.
-    Capability("team.roles", "Team roles, permissions and audit", "administration", False, task="P01"),
     Capability("data.licensed", "Licensed contact database and waterfall enrichment", "data", False, task="P02"),
     Capability("sequences.multichannel", "Multi-channel sequence builder", "sequences", False, task="P03"),
     Capability("calls.telephony", "Calling workspace (dialer, recording)", "calls", False, task="P04"),
@@ -129,7 +128,10 @@ _STATIC: tuple[Capability, ...] = (
     Capability("channel.sms", "SMS / WhatsApp outreach", "channels", False,
                excluded="Only the email channel is in scope."),
     Capability("dashboard.public", "Dashboard reachable beyond localhost", "administration", False,
-               excluded="The dashboard has no login; it is local-only until P01 adds authentication."),
+               excluded="Franco is a single-operator local app (owner decision, 2026-10-20); "
+                        "the dashboard has no login and stays on localhost."),
+    Capability("team.roles", "Team roles, permissions and shared access", "administration", False,
+               excluded="Single operator by owner decision (2026-10-20); no team accounts."),
 )
 
 
