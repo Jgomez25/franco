@@ -615,7 +615,12 @@ def cmd_import(args):
                       " file or re-run with --verify.")
         print()
 
-    asyncio.run(_import())
+    from franco.fixtures import PrototypeDataError
+    try:
+        asyncio.run(_import())
+    except PrototypeDataError as e:
+        print(f"\n  {e}\n")
+        sys.exit(1)
 
 
 def cmd_suppress(args):

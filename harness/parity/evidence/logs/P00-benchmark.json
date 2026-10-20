@@ -1,0 +1,213 @@
+{
+  "seed": 20261020,
+  "rows": 100,
+  "unique": 90,
+  "passed": true,
+  "gates": [
+    {
+      "id": "dup-unique",
+      "metric": "contacts stored from 100 rows",
+      "threshold": 90,
+      "actual": 90,
+      "passed": true
+    },
+    {
+      "id": "dup-rejected",
+      "metric": "planted duplicates rejected",
+      "threshold": 10,
+      "actual": 10,
+      "passed": true
+    },
+    {
+      "id": "dup-reimport",
+      "metric": "contacts after re-importing the same file",
+      "threshold": 90,
+      "actual": 90,
+      "passed": true
+    },
+    {
+      "id": "filter-all",
+      "metric": "precision/recall/total",
+      "threshold": [
+        1.0,
+        1.0,
+        90
+      ],
+      "actual": [
+        1.0,
+        1.0,
+        90
+      ],
+      "passed": true
+    },
+    {
+      "id": "filter-industry",
+      "metric": "precision/recall/total",
+      "threshold": [
+        1.0,
+        1.0,
+        23
+      ],
+      "actual": [
+        1.0,
+        1.0,
+        23
+      ],
+      "passed": true
+    },
+    {
+      "id": "filter-verified",
+      "metric": "precision/recall/total",
+      "threshold": [
+        1.0,
+        1.0,
+        48
+      ],
+      "actual": [
+        1.0,
+        1.0,
+        48
+      ],
+      "passed": true
+    },
+    {
+      "id": "filter-industry+verified",
+      "metric": "precision/recall/total",
+      "threshold": [
+        1.0,
+        1.0,
+        12
+      ],
+      "actual": [
+        1.0,
+        1.0,
+        12
+      ],
+      "passed": true
+    },
+    {
+      "id": "filter-literal-wildcards",
+      "metric": "precision/recall/total",
+      "threshold": [
+        1.0,
+        1.0,
+        1
+      ],
+      "actual": [
+        1.0,
+        1.0,
+        1
+      ],
+      "passed": true
+    },
+    {
+      "id": "filter-wildcard-not-pattern",
+      "metric": "precision/recall/total",
+      "threshold": [
+        1.0,
+        1.0,
+        0
+      ],
+      "actual": [
+        1.0,
+        1.0,
+        0
+      ],
+      "passed": true
+    },
+    {
+      "id": "filter-name",
+      "metric": "precision/recall/total",
+      "threshold": [
+        1.0,
+        1.0,
+        6
+      ],
+      "actual": [
+        1.0,
+        1.0,
+        6
+      ],
+      "passed": true
+    },
+    {
+      "id": "filter-status",
+      "metric": "precision/recall/total",
+      "threshold": [
+        1.0,
+        1.0,
+        90
+      ],
+      "actual": [
+        1.0,
+        1.0,
+        90
+      ],
+      "passed": true
+    },
+    {
+      "id": "filter-no-match",
+      "metric": "precision/recall/total",
+      "threshold": [
+        1.0,
+        1.0,
+        0
+      ],
+      "actual": [
+        1.0,
+        1.0,
+        0
+      ],
+      "passed": true
+    },
+    {
+      "id": "time-import",
+      "metric": "seconds to import 100 rows",
+      "threshold": 15.0,
+      "actual": 4.931,
+      "passed": true
+    },
+    {
+      "id": "time-search-p95",
+      "metric": "search request p95 (ms)",
+      "threshold": 250.0,
+      "actual": 192.1,
+      "passed": true
+    },
+    {
+      "id": "time-workflow",
+      "metric": "import \u2192 search \u2192 export (s)",
+      "threshold": 30.0,
+      "actual": 13.43,
+      "passed": true
+    },
+    {
+      "id": "cost-network",
+      "metric": "external connections attempted",
+      "threshold": 0,
+      "actual": 0,
+      "passed": true
+    },
+    {
+      "id": "cost-spend",
+      "metric": "recorded spend (USD)",
+      "threshold": 0.0,
+      "actual": 0.0,
+      "passed": true
+    },
+    {
+      "id": "fixture-gate",
+      "metric": "synthetic addresses not refused as fixtures",
+      "threshold": 0,
+      "actual": 0,
+      "passed": true
+    },
+    {
+      "id": "fixture-export",
+      "metric": "synthetic rows in the default sequencer export",
+      "threshold": 0,
+      "actual": 0,
+      "passed": true
+    }
+  ]
+}

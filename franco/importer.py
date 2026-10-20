@@ -459,6 +459,10 @@ async def run_import(
     source: str = "import",
 ) -> ImportReport:
     """One entry point for every list kind (CLI and dashboard)."""
+    from franco.fixtures import PrototypeDataError, looks_like_prototype_text
+    if looks_like_prototype_text(text):
+        raise PrototypeDataError("this is a blueprint prototype export (simulated data), "
+                         "not a CSV list; it cannot be imported")
     if kind == "accounts":
         return await import_accounts(state, read_rows(text), campaigns or set(),
                                      default_owner=default_owner, verify=verify,

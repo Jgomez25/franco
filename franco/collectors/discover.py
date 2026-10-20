@@ -741,21 +741,27 @@ async def run_discovery(
     if provider is None:
         raise ValueError(f"unknown discovery provider: {provider_key!r}")
 
+    from franco.capabilities import evaluate
+
     queries = queries or build_queries(config)
+    # The capability gate runs before geocoding: resolving cities is itself
+    # an external request, and an unconfigured provider must make none.
+    env = load_env().model_dump()
+    capability = evaluate(f"discovery.{provider_key}", env)
+    if not dry_run and not capability.executable:
+        report = DiscoveryReport(provider=provider_key, queries=len(queries))
+        report.estimated_cost = provider.estimate(queries)
+        report.errors.append(f"{provider.label} is {capability.state}: "
+                             f"{capability.reason} in .env")
+        report.stopped = "not configured"
+        return report
+
     if provider.kind == "listings":
         queries = await resolve_coordinates(state, queries)
     report = DiscoveryReport(provider=provider_key, queries=len(queries))
     report.estimated_cost = provider.estimate(queries)
 
     if dry_run:
-        return report
-
-    env = load_env().model_dump()
-    if not provider.configured(env):
-        missing = ", ".join(k.upper() for k in provider.env_keys
-                            if not env.get(k))
-        report.errors.append(f"{provider.label} needs {missing} in .env")
-        report.stopped = "not configured"
         return report
 
     if report.estimated_cost > max_spend:

@@ -11,6 +11,8 @@ code.
 import re
 from dataclasses import dataclass, field
 
+from franco.fixtures import FIXTURE_REASON, is_fixture_address
+
 # Spam-filter and AI-tell phrases that must never appear in outgoing mail.
 # Mirrors prompts/writer.md; enforced here because prompts can be ignored.
 BANNED_PHRASES = (
@@ -70,6 +72,8 @@ def pre_send_check(
     # Recipient sanity
     if not EMAIL_RE.match(to_email):
         reasons.append(f"invalid recipient address '{to_email}'")
+    if is_fixture_address(to_email):
+        reasons.append(FIXTURE_REASON)
     if prospect is not None:
         if (prospect.email or "").strip().lower() != to_email:
             reasons.append("recipient does not match the prospect record")

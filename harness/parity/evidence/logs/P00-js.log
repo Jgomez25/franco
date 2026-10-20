@@ -1,0 +1,20 @@
+TAP version 13
+# Subtest: CSV neutralizes formulas and preserves quoting and line breaks
+ok 1 - CSV neutralizes formulas and preserves quoting and line breaks
+  ---
+  duration_ms: 2.052125
+  ...
+# Subtest: Corrupt saved views do not crash the workspace
+ok 2 - Corrupt saved views do not crash the workspace
+  ---
+  duration_ms: 0.446583
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 128.951

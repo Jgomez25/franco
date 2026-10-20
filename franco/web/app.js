@@ -675,7 +675,50 @@ async function runCohort() {
 
 // ── Settings ──
 
+// ── Capabilities: preview / unavailable / configured / degraded / live ──
+
+const CAPABILITY_TONE = { live: 'good', configured: 'active', degraded: 'waiting',
+                          unavailable: 'idle', preview: 'note' };
+
+async function loadCapabilities() {
+  const el = document.getElementById('capabilities');
+  if (!el) return;
+  el.innerHTML = '<p class="muted">Checking capabilities&hellip;</p>';
+  const data = await api('/api/capabilities');
+  if (!data || !Array.isArray(data.capabilities)) {
+    el.innerHTML = '<p class="muted">Couldn\'t read capability states &mdash; the dashboard ' +
+      'server may be stopped or disconnected. <button class="btn btn-secondary btn-sm" ' +
+      'onclick="loadCapabilities()">Retry</button></p>';
+    return;
+  }
+  if (!data.capabilities.length) {
+    el.innerHTML = '<p class="muted">No capabilities are registered.</p>';
+    return;
+  }
+  const order = ['live', 'degraded', 'configured', 'unavailable', 'preview'];
+  const rows = data.capabilities.slice().sort((a, b) =>
+    order.indexOf(a.state) - order.indexOf(b.state) || a.label.localeCompare(b.label));
+  const counts = order.map(s => [s, rows.filter(r => r.state === s).length])
+    .filter(([, n]) => n).map(([s, n]) => n + ' ' + s).join(' &middot; ');
+  el.innerHTML =
+    (data.health_error
+      ? '<p class="muted">Health checks could not be read, so degraded and live states ' +
+        'may be out of date.</p>' : '') +
+    '<p class="muted" style="font-size:12px">' + counts + ' &middot; scope ' +
+      escHtml(data.matrix_version) + '</p>' +
+    '<div class="table-card" style="overflow-x:auto"><table><thead><tr><th>Capability</th><th>State</th>' +
+    '<th>Why</th></tr></thead><tbody>' +
+    rows.map(c => '<tr><td>' + escHtml(c.label) +
+      '<div class="muted" style="font-family:var(--mono);font-size:11px">' +
+      escHtml(c.key) + '</div></td><td><span class="badge t-' +
+      (CAPABILITY_TONE[c.state] || 'idle') + '">' + escHtml(c.state) + '</span></td><td>' +
+      escHtml(c.reason) + (c.last_success ? ' <span class="muted">(' +
+      escHtml(c.last_success) + ')</span>' : '') + '</td></tr>').join('') +
+    '</tbody></table></div>';
+}
+
 async function loadSettings() {
+  loadCapabilities();
   const data = await api('/api/settings');
   if (!data) return;
 
