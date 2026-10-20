@@ -2,16 +2,45 @@
   "task_id": "P00",
   "result": "incomplete",
   "verification": "mocked",
-  "commit": "",
+  "commit": "6afd7c2",
   "reviewer": "",
-  "summary": "Adds a capability registry with five explicit states (preview, unavailable, configured, degraded, live) and an execution gate. require() refuses non-executable capabilities before any adapter or HTTP client is built. Also fixes a real A1 defect: run_discovery geocoded cities over the network before checking provider configuration; the gate now runs first. Adds a fixture guard: RFC 2606/6761 reserved domains are refused at the pre-send gate, native staging, the Instantly lead upload and the default export, and the blueprint's prototype export is refused by the config loader and CSV import. Adds a 100-contact synthetic benchmark with duplicate, filter, timing, cost and fixture gates. Adds GET /api/capabilities and a Settings > Capabilities card. Drafts docs/CAPABILITY_MATRIX.md. The result stays incomplete: the matrix is a draft awaiting owner decisions, there is no commit, and no independent human review has happened.",
+  "summary": "Adds a capability registry with five explicit states (preview, unavailable, configured, degraded, live) and an execution gate. require() refuses non-executable capabilities before any adapter or HTTP client is built. Also fixes a real A1 defect: run_discovery geocoded cities over the network before checking provider configuration; the gate now runs first. Adds a fixture guard: RFC 2606/6761 reserved domains are refused at the pre-send gate, native staging, the Instantly lead upload and the default export, and the blueprint's prototype export is refused by the config loader and CSV import. Adds a 100-contact synthetic benchmark with duplicate, filter, timing, cost and fixture gates. Adds GET /api/capabilities and a Settings > Capabilities card. Records the capability matrix in docs/CAPABILITY_MATRIX.md, with the owner's 2026-10-20 decisions: internal single operator, United States only, up to 50 cold emails a day, benchmark gates accepted. Implementation commit 6afd7c2 (merged via PR #1); decisions recorded in a follow-up commit. The result stays incomplete only because no independent human review has happened.",
   "tests": [
-    {"command": ".venv/bin/python -m pytest tests/test_p00_capabilities.py -q -p no:cacheprovider", "exit_code": 0, "log": "harness/parity/evidence/logs/P00-acceptance.log (44 passed)"},
-    {"command": ".venv/bin/python -m pytest tests/test_discover.py tests/test_outbox_native.py tests/test_email_wiring.py tests/test_outreach.py -q -p no:cacheprovider", "exit_code": 0, "log": "harness/parity/evidence/logs/P00-targeted-1.log (104 passed)"},
-    {"command": ".venv/bin/python -m pytest tests/test_config.py tests/test_config_extra.py tests/test_importer.py tests/test_contact_workspace.py tests/test_signals_export.py tests/test_dashboard_outbox.py tests/test_dashboard_signals.py tests/test_code_scanning_fixes.py -q -p no:cacheprovider", "exit_code": 0, "log": "harness/parity/evidence/logs/P00-targeted-2.log (107 passed)"},
-    {"command": ".venv/bin/python -m pytest -q -p no:cacheprovider", "exit_code": 0, "log": "harness/parity/evidence/logs/P00-full-suite.log (650 passed, 20 skipped; run before the final test-only addition test_unconfigured_email_providers_make_no_request, which is covered by P00-acceptance.log)"},
-    {"command": "node --test tests/contact_workspace.test.cjs", "exit_code": 0, "log": "harness/parity/evidence/logs/P00-js.log (2 passed)"},
-    {"command": ".venv/bin/python -m franco.benchmark --json", "exit_code": 0, "log": "harness/parity/evidence/logs/P00-benchmark.json (19/19 gates; import 4.9 s, search p95 192 ms, workflow 13.4 s under load average ~40)"}
+    {
+      "command": ".venv/bin/python -m pytest tests/test_p00_capabilities.py -q -p no:cacheprovider",
+      "exit_code": 0,
+      "log": "harness/parity/evidence/logs/P00-acceptance.log (44 passed)"
+    },
+    {
+      "command": ".venv/bin/python -m pytest tests/test_discover.py tests/test_outbox_native.py tests/test_email_wiring.py tests/test_outreach.py -q -p no:cacheprovider",
+      "exit_code": 0,
+      "log": "harness/parity/evidence/logs/P00-targeted-1.log (104 passed)"
+    },
+    {
+      "command": ".venv/bin/python -m pytest tests/test_config.py tests/test_config_extra.py tests/test_importer.py tests/test_contact_workspace.py tests/test_signals_export.py tests/test_dashboard_outbox.py tests/test_dashboard_signals.py tests/test_code_scanning_fixes.py -q -p no:cacheprovider",
+      "exit_code": 0,
+      "log": "harness/parity/evidence/logs/P00-targeted-2.log (107 passed)"
+    },
+    {
+      "command": ".venv/bin/python -m pytest -q -p no:cacheprovider",
+      "exit_code": 0,
+      "log": "harness/parity/evidence/logs/P00-full-suite.log (650 passed, 20 skipped; run before the final test-only addition test_unconfigured_email_providers_make_no_request, which is covered by P00-acceptance.log)"
+    },
+    {
+      "command": "node --test tests/contact_workspace.test.cjs",
+      "exit_code": 0,
+      "log": "harness/parity/evidence/logs/P00-js.log (2 passed)"
+    },
+    {
+      "command": ".venv/bin/python -m franco.benchmark --json",
+      "exit_code": 0,
+      "log": "harness/parity/evidence/logs/P00-benchmark.json (19/19 gates; import 4.9 s, search p95 192 ms, workflow 13.4 s under load average ~40)"
+    },
+    {
+      "command": ".venv/bin/python -m pytest tests/test_p00_capabilities.py -q -p no:cacheprovider",
+      "exit_code": 0,
+      "log": "harness/parity/evidence/logs/P00-acceptance-decisions.log (rerun after recording the single-operator decision)"
+    }
   ],
   "criteria": {
     "P00-A1": {
@@ -25,15 +54,15 @@
   },
   "provider_evidence": [],
   "limitations": [
-    "Deliverable 1 is a draft. docs/CAPABILITY_MATRIX.md records what the code supports and proposes scope; owner decisions (SaaS vs internal, regions, data provider, CRM/telephony/calendar, volumes, retention, budgets, benchmark thresholds) are open.",
-    "Benchmark timing ceilings (15 s import, 250 ms search p95, 30 s workflow) were set after measurement, replacing unmeasured 5 s / 10 s guesses that failed under load. Pytest enforces only the deterministic gates; the timing gates are enforced by 'python -m franco.benchmark'.",
+    "Owner decisions recorded 2026-10-20 (deployment, regions, volume, benchmark gates). Provider choices for P02/P04/P05/P07, the production mailbox provider, retention and a monthly spend ceiling remain open; they block their own tasks, not P00.",
+    "Benchmark timing ceilings (15 s import, 250 ms search p95, 30 s workflow), accepted by the owner, were set after measurement, replacing unmeasured 5 s / 10 s guesses that failed under load. Pytest enforces only the deterministic gates; the timing gates are enforced by 'python -m franco.benchmark'.",
     "Contact import is slow: about 5.6 SQLite connections and one commit per row, 2.4-8.0 s per 100 rows. This is pre-existing and not changed here.",
     "Writer-staged items (generated, approved-copy and raad modes) can still appear in the Outbox as drafts for fixture addresses; the pre-send gate fails them at dispatch. Only native campaign staging and the Instantly upload skip fixtures earlier.",
     "Live means a successful exchange recorded in the local database within 30 days. It is not provider-certified, and verification providers and LinkedIn/Cloudflare can never reach live because no per-provider success is recorded.",
     "Email, verification, LinkedIn and Cloudflare execution still rely on each adapter's own configuration checks (tested for email), not on capabilities.require(); only discovery and the dashboard discovery route call the registry gate. Brain (Claude/Codex) calls are outside the registry and keep their own checks.",
     "Fixture detection is by reserved domain and by the prototype export marker. Fictional names on real domains cannot be detected.",
     "Screen check (empty temporary FRANCO_HOME, port 5566): the Settings card renders, the disconnected state recovers via Retry, no horizontal scroll at 375 px. This is additional evidence only.",
-    "No commit was made and no reviewer has examined this work."
+    "No independent human reviewer has examined this work; the reviewer field stays empty until one does."
   ],
   "required_configuration": [
     "None for P00 itself. The capability states reflect existing .env keys (GMAIL_*, SMTP_*, INSTANTLY_API_KEY, REOON/ZEROBOUNCE/HUNTER keys, DATAFORSEO_*, SERPER_API_KEY, LINKEDIN_*, CLOUDFLARE_*) and data/gmail_token.json."

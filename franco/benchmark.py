@@ -11,7 +11,7 @@ duplicates (same address, different case) and one company name contains
 SQL wildcard characters, so the expected answers are known in advance and
 the system's answers are compared against them exactly.
 
-Gates (thresholds are proposals for the owner to accept in the matrix):
+Gates (thresholds agreed by the owner on 2026-10-20; see the matrix):
 
 - duplicates: 90 unique contacts stored from 100 rows; the 10 planted
   duplicates are rejected; re-importing the same file adds nothing.
@@ -44,8 +44,8 @@ SEED = 20261020
 TOTAL_ROWS = 100
 PLANTED_DUPLICATES = 10
 
-# Timing ceilings are user-facing budgets on a developer laptop, proposed for
-# the owner to accept. Measured on the reference Mac (2026-10-20): import
+# Timing ceilings are user-facing budgets on a developer laptop, agreed by
+# the owner on 2026-10-20. Measured on the reference Mac (2026-10-20): import
 # 2.4-8.0 s (about 5.6 SQLite connections and one commit per row), search
 # p95 under 40 ms, workflow 4.6-15 s. The import cost is pre-existing.
 GATES = {
