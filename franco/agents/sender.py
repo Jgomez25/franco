@@ -21,7 +21,10 @@ from franco.config import FrancoConfig, EnvConfig
 from franco.fixtures import is_fixture_address
 from franco.gate import pre_send_check
 from franco.integrations.instantly import InstantlyClient
-from franco.integrations.mail_provider import NATIVE_PROVIDERS, get_mail_provider
+from franco.integrations.mail_provider import (
+    ABSENT, FOUND, NATIVE_PROVIDERS, UNKNOWN, get_mail_provider,
+)
+from franco.jobs import CANCELLED, DEFAULT_LEASE_SECONDS, RETRY_WAIT, JobStore
 from franco.outreach import (
     add_business_days, build_footer, compliance_problem, local_date,
     send_at_utc, unsubscribe_headers, with_footer,
@@ -46,6 +49,7 @@ STOP_STATUSES = {
 DEAD_STEP_STATUSES = {"rejected", "cancelled", "failed"}
 
 KILL_SWITCH_KEY = "sending_paused"
+SEND_JOB = "email.send"
 BOUNCE_COUNT_KEY = "bounce_count"
 
 EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
@@ -74,6 +78,8 @@ class Sender:
         self.config = config
         self.instantly = InstantlyClient(env.instantly_api_key)
         self.provider = get_mail_provider(config, env)
+        self.jobs = JobStore(state)
+        self.lease_seconds = DEFAULT_LEASE_SECONDS
         # Disabled in tests to skip inter-send sleeps.
         self.send_pacing = True
 
@@ -504,6 +510,118 @@ class Sender:
                 send_at=send_at_utc(day, outreach.send_hour, outreach.timezone),
             )
 
+    # ── Durable dispatch: claim, record, recover ──
+
+    def _message_id_for(self, item: dict) -> str:
+        """A Message-ID fixed per outbox item, so every attempt (and the
+        reconciliation after a crash) refers to the same message."""
+        sender = (getattr(self.config.persona, "email", "") or "").strip()
+        domain = sender.rsplit("@", 1)[-1] if "@" in sender else "franco.local"
+        return f"<franco.{item['id']}@{domain}>"
+
+    async def _claim_send(self, item: dict, message_id: str):
+        """(job_id, attempt) once this worker owns the send, else None."""
+        job = await self.jobs.enqueue(SEND_JOB, f"{SEND_JOB}:{item['id']}",
+                                      input_ref=item["id"],
+                                      workspace_id=item.get("workspace_id") or "local")
+        leased = await self.jobs.claim(job["id"], lease_seconds=self.lease_seconds)
+        if leased is None:
+            return None        # in flight elsewhere, backing off, or finished
+        attempt = leased["attempt_count"]
+        if not await self.state.mark_outbox_sending(item["id"], message_id):
+            # Someone changed the row (rejected, cancelled) since we read it.
+            await self.jobs.finish(job["id"], attempt, CANCELLED, "state_changed",
+                                   "state_changed", "outbox item was no longer approved")
+            return None
+        return job["id"], attempt
+
+    async def _record_sent(self, item: dict, prospect, message_id: str,
+                           thread_ref: str = "") -> None:
+        """Everything that follows a confirmed send, in one place."""
+        now_iso = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+        await self.state.update_outbox_item(
+            item["id"], status="sent", sent_at=now_iso, error="",
+            message_id=message_id, thread_ref=thread_ref or item.get("thread_ref", ""),
+        )
+        if prospect is not None and prospect.status in ("new", "queued"):
+            await self.state.update_prospect_status(prospect.id, "contacted")
+        if item["kind"] == "sequence" and item.get("seq_day"):
+            await self._retime_followups(item)
+        # A sent reply belongs in its conversation thread.
+        if item["kind"] == "reply" and item.get("conversation_id"):
+            try:
+                convo = await self.state.get_conversation(item["conversation_id"])
+                if convo:
+                    from franco.models.conversation import Message
+                    convo.thread.append(Message(sender="franco", content=item["body"]))
+                    await self.state.update_conversation(
+                        convo.id, thread_json=convo.thread_json())
+            except Exception as e:
+                logger.debug(f"Sender: convo append failed: {e}")
+        await self.state.log_action(
+            action_type="email_sent",
+            agent="sender",
+            details={
+                "to": item["to_email"], "step": item["step"],
+                "kind": item["kind"], "provider": self.provider.name,
+            },
+        )
+
+    async def _recover_sends(self) -> None:
+        """Settle sends whose worker died, before anything new goes out.
+
+        The provider is asked only when the row reached 'sending', because
+        only then can it hold the message. Found: record it as sent. Absent:
+        release it to send again with the same Message-ID. Unknown: hold it
+        as 'needs_check' for a human. Nothing is ever resent on a guess.
+        """
+        for job in await self.jobs.expired(SEND_JOB):
+            attempt = job["attempt_count"]
+            item = await self.state.get_outbox_item(job["input_ref"])
+            status = (item or {}).get("status")
+            if status == "sent":
+                await self.jobs.recover(job["id"], attempt, FOUND)
+                continue
+            if status == "approved":
+                # Died between the claim and 'sending': the provider was
+                # never called.
+                await self.jobs.recover(job["id"], attempt, ABSENT)
+                continue
+            if status != "sending":
+                await self.jobs.finish(job["id"], attempt, CANCELLED, "state_changed",
+                                       "state_changed", f"outbox item is '{status}'")
+                continue
+            since = None
+            try:
+                since = datetime.fromisoformat(job["updated_at"])
+            except (TypeError, ValueError):
+                pass
+            try:
+                finding = await self.provider.find_sent(
+                    item.get("message_id", ""), item["to_email"], item["subject"], since)
+            except Exception as e:
+                logger.warning(f"Sender: could not reconcile {item['id']}: {e}")
+                finding = UNKNOWN
+            outcome = await self.jobs.recover(job["id"], attempt, finding)
+            if finding == FOUND:
+                prospect = await self.state.get_prospect(item["prospect_id"])
+                await self._record_sent(item, prospect, item.get("message_id", ""))
+                logger.info(f"Sender: recovered send to {item['to_email']}: "
+                            "the provider has it, recorded without resending.")
+            elif finding == ABSENT and outcome == RETRY_WAIT:
+                await self.state.update_outbox_item(
+                    item["id"], status="approved",
+                    error="recovered: the provider never received it; sending again")
+            else:
+                await self.state.update_outbox_item(
+                    item["id"], status="needs_check",
+                    error=("worker stopped mid-send and the provider cannot confirm "
+                           "delivery; check the Sent folder, then mark it sent or "
+                           "release it") if finding != ABSENT
+                    else "retry budget used up")
+                logger.warning(f"Sender: send to {item['to_email']} needs a human "
+                               "check (delivery unconfirmed).")
+
     async def _drain_due(self):
         """Send due, approved outbox items through the provider."""
         if not self.provider.is_configured():
@@ -512,6 +630,8 @@ class Sender:
                 "yet — outbox is holding. See CLAUDE.md → provider setup."
             )
             return
+
+        await self._recover_sends()
 
         max_daily = self.config.channels.email.max_daily_sends
         sent_today = await self.state.count_outbox_sent_today()
@@ -589,50 +709,44 @@ class Sender:
                        if item["kind"] == "sequence" else {})
             if headers:
                 send_kwargs["headers"] = headers
+
+            # Commit to this attempt (job lease + outbox 'sending' + the
+            # Message-ID) BEFORE the provider sees anything. A crash after
+            # this point is reconciled on the next cycle, never resent blind.
+            message_id = item.get("message_id") or self._message_id_for(item)
+            claim = await self._claim_send(item, message_id)
+            if claim is None:
+                continue
+            job_id, attempt = claim
             result = await self.provider.send_email(
-                item["to_email"], item["subject"], item["body"], **send_kwargs
+                item["to_email"], item["subject"], item["body"],
+                message_id=message_id, **send_kwargs
             )
+            if result.ambiguous:
+                # The provider may have it. Leave the row 'sending'; when the
+                # lease runs out, recovery asks the provider before anything
+                # else happens. It counts against today's cap meanwhile.
+                sent += 1
+                logger.warning(
+                    f"Sender: delivery to {item['to_email']} is unconfirmed "
+                    f"({result.error}); will reconcile before any retry.")
+                continue
             if not result.ok:
+                outcome = await self.jobs.fail(job_id, attempt, "provider_error",
+                                               result.error, result.retriable)
+                retrying = outcome == RETRY_WAIT
                 await self.state.update_outbox_item(
-                    item["id"], status="failed", error=result.error[:300]
+                    item["id"], status="approved" if retrying else "failed",
+                    error=(("retrying: " if retrying else "") + result.error)[:300],
                 )
                 continue
 
             sent += 1
-            now_iso = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
-            await self.state.update_outbox_item(
-                item["id"], status="sent", sent_at=now_iso,
-                message_id=result.message_id, thread_ref=result.thread_ref,
-            )
-            if prospect.status in ("new", "queued"):
-                await self.state.update_prospect_status(prospect.id, "contacted")
+            await self._record_sent(item, prospect, result.message_id or message_id,
+                                    result.thread_ref)
+            await self.jobs.succeed(job_id, attempt, result_ref=result.message_id or message_id)
             if item["kind"] == "sequence":
                 sent_sequences.add((item.get("campaign_id"), item["prospect_id"]))
-                if item.get("seq_day"):
-                    await self._retime_followups(item)
-
-            # A sent reply belongs in its conversation thread.
-            if item["kind"] == "reply" and item.get("conversation_id"):
-                try:
-                    convo = await self.state.get_conversation(item["conversation_id"])
-                    if convo:
-                        from franco.models.conversation import Message
-                        convo.thread.append(
-                            Message(sender="franco", content=item["body"])
-                        )
-                        await self.state.update_conversation(
-                            convo.id, thread_json=convo.thread_json()
-                        )
-                except Exception as e:
-                    logger.debug(f"Sender: convo append failed: {e}")
-            await self.state.log_action(
-                action_type="email_sent",
-                agent="sender",
-                details={
-                    "to": item["to_email"], "step": item["step"],
-                    "kind": item["kind"], "provider": self.provider.name,
-                },
-            )
             logger.info(
                 f"Sender: sent step {item['step']} to {item['to_email']} "
                 f"via {self.provider.name}."

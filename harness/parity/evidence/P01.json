@@ -1,0 +1,77 @@
+{
+  "task_id": "P01",
+  "result": "passed",
+  "verification": "mocked",
+  "commit": "3d1aac0",
+  "reviewer": "Jgomez25 (owner), review stated in chat on 2026-10-20",
+  "summary": "Three slices. (1) Durable jobs (migration v13: jobs + job_attempts with unique idempotency keys, leased compare-and-set claims, exponential backoff, retry budgets, dead letters, requeue) and crash-safe email dispatch: the job lease, outbox 'sending' and a per-item Message-ID are committed before the provider is called; expired leases are reconciled through MailProvider.find_sent (found / absent / unknown), never resent blind, and unknown becomes 'needs_check' for the operator. (2) Encrypted credential vault: AES-256-GCM per credential (name as AAD) in data/vault.json, key only in the OS keychain via keyring; credential references with fingerprint, rotation, expiry and revocation; crash-recoverable key rotation; secret redaction in the log-record factory; reversible migration from .env; CLI, API and Settings card. (3) Tenancy (migration v14): workspaces, users, memberships (rep/manager/admin), hashed bearer tokens, audit events, and workspace_id on companies, prospects, campaigns, outbox and conversations. Local mode (the default) is unchanged and separately tested. Shared mode (FRANCO_MODE=shared) authenticates tokens and applies a server-side route allowlist with role permissions and workspace ownership checks (another workspace's record answers 404); every unlisted API route is refused; credential management needs admin of the installation workspace; denials and allowed mutations are audited. Owner decisions 2026-10-20: build tenancy anyway; encrypted file plus keychain key; durable sends first. Implementation commits a6deb8c, 4f92ff7 and 3d1aac0. All three acceptance criteria have passing tests. Reviewed by the owner on 2026-10-20. Verification remains mocked: no Gmail/SMTP sandbox or real OS keychain was exercised, so this is not live-readiness evidence.",
+  "tests": [
+    {
+      "command": ".venv/bin/python -m pytest tests/test_p01_durable_sends.py -q -p no:cacheprovider",
+      "exit_code": 0,
+      "log": "harness/parity/evidence/logs/P01-durable-sends.log (26 passed)"
+    },
+    {
+      "command": ".venv/bin/python -m pytest tests/test_outbox_native.py tests/test_approved_copy.py tests/test_raad.py tests/test_bounces.py tests/test_replies.py tests/test_autopilot.py tests/test_email_wiring.py tests/test_p00_capabilities.py -q -p no:cacheprovider",
+      "exit_code": 0,
+      "log": "harness/parity/evidence/logs/P01-targeted-1.log (135 passed)"
+    },
+    {
+      "command": ".venv/bin/python -m pytest tests/test_state.py tests/test_state_extra.py tests/test_state_phase1.py tests/test_dashboard_outbox.py tests/test_dashboard_signals.py tests/test_code_scanning_fixes.py tests/test_pipeline.py -q -p no:cacheprovider",
+      "exit_code": 0,
+      "log": "harness/parity/evidence/logs/P01-targeted-2.log (103 passed)"
+    },
+    {
+      "command": ".venv/bin/python -m pytest tests/test_p01_vault.py -q -p no:cacheprovider",
+      "exit_code": 0,
+      "log": "harness/parity/evidence/logs/P01-vault.log (12 passed)"
+    },
+    {
+      "command": ".venv/bin/python -m pytest tests/test_config.py tests/test_config_extra.py tests/test_email_wiring.py tests/test_discover.py tests/test_p00_capabilities.py tests/test_p01_durable_sends.py tests/test_p01_vault.py tests/test_code_scanning_fixes.py -q -p no:cacheprovider",
+      "exit_code": 0,
+      "log": "harness/parity/evidence/logs/P01-targeted-3.log (183 passed)"
+    },
+    {
+      "command": ".venv/bin/python -m pytest tests/test_p01_tenancy.py -q -p no:cacheprovider",
+      "exit_code": 0,
+      "log": "harness/parity/evidence/logs/P01-tenancy.log (15 passed)"
+    },
+    {
+      "command": ".venv/bin/python -m pytest -q -p no:cacheprovider",
+      "exit_code": 0,
+      "log": "harness/parity/evidence/logs/P01-full-suite.log (703 passed, 20 skipped: environment-gated Codex CLI and packaging tests)"
+    }
+  ],
+  "criteria": {
+    "P01-A1": {
+      "result": "passed",
+      "evidence": "tests/test_p01_tenancy.py, end to end through the dashboard HTTP layer in shared mode with three workspaces. Cross-tenant IDs: a rep in 'acme' calling approve/reject/edit/resolve on a 'globex' outbox item, or reading a 'globex' company's contacts, gets 404; the item stays pending_review; 5 'denied' audit events are written to acme naming the target, none into globex. Lists (outbox, contact search, companies) return only the caller's workspace, and bulk approval needs a manager and stays inside the workspace. Credentials: a rep, a manager and another workspace's admin each get 403 on POST /api/settings/env, POST /api/settings/test-instantly (zero external requests), GET /api/settings, GET /api/secrets and POST /api/secrets/{name}/revoke; .env is not written; each denial is audited. The installation admin succeeds. Also covered: missing, wrong and revoked tokens and disabled users get 401; tokens are stored only as SHA-256 hashes; every API route not on the allowlist answers 403 in shared mode, even for the installation admin; every allowlisted route exists; the audit log is manager+ and workspace-scoped; local mode needs no token, keeps every route and the localhost guard."
+    },
+    "P01-A2": {
+      "result": "passed",
+      "evidence": "tests/test_p01_durable_sends.py with tests/durable_send_worker.py: a real subprocess sends through a file-backed fake provider and SIGKILLs itself (returncode -9) after the provider's durable acknowledgement and before Franco records the send. A second process reconciles: the mailbox still holds exactly 1 message, the outbox row is 'sent' with the same Message-ID, and the job attempt outcome is lease_expired_found. Also covered: kill before acknowledgement (sent exactly once on replay, same Message-ID; a further cycle sends nothing), and kill with an unconfirmable provider (held as needs_check, job dead with code 'unconfirmed', never resent across two recovery cycles). Mocked verification only: Gmail keeping a client-set Message-ID, and Gmail search freshness, have not been exercised against a real or sandbox mailbox."
+    },
+    "P01-A3": {
+      "result": "passed",
+      "evidence": "tests/test_p01_vault.py. Expired: a credential past expires_at raises CredentialExpired; storing a new value recovers it. Revocation: the ciphertext and nonce are deleted from the file (not hidden); get raises CredentialRevoked; load_env reports {'SERPER_API_KEY': 'revoked'} and discovery.serper becomes unavailable with reason 'SERPER_API_KEY is revoked in the vault'; putting a new value recovers. Recovery also covers a key rotation crashed between file rewrite and keychain update (backup restored, values readable). Redaction: after load_env registers vault secrets, formatted args, f-strings and exception tracebacks in log records all show ***REDACTED***; the Gmail refresh token is redacted; /api/secrets, /api/settings, /api/setup-status and /api/capabilities never contain secret values. Plus: no plaintext in the vault file, mode 0600, ciphertexts bound to names, tampering detected, a missing keychain key locks the vault and refuses to orphan stored secrets, the keyring adapter maps backend errors to VaultLocked, and migrate/unmigrate round-trips .env and the token byte for byte. Keychain tests use an in-memory key or a fake keyring backend; the real OS keychain was not exercised by tests."
+    }
+  },
+  "provider_evidence": [],
+  "limitations": [
+    "Gmail find_sent searches rfc822msgid first, then recipient + subject + time. Whether Gmail keeps a client-set Message-ID is unverified without a sandbox; the fallback can report FOUND for a different email with the same subject to the same person, which skips a send (no duplicate, but a missed email).",
+    "The SMTP adapter only answers FOUND or UNKNOWN (IMAP Sent-folder search), so any SMTP crash mid-send ends in needs_check for the operator.",
+    "The legacy Instantly path (campaign deploy and lead upload) is not on the durable job store.",
+    "Confirming a needs_check item as sent from the dashboard does not re-time later sequence steps; they keep their staged schedule.",
+    "New runtime dependencies cryptography 47.0.0 and keyring 25.7.0 (plus cffi, pycparser, jaraco-*, more-itertools) were added to pyproject, requirements.in and the hashed lock. The lock was regenerated with pip-compile on macOS / Python 3.12 (the documented command uses Python 3.11 via uvx, which is not installed), so keyring's Linux and Windows-only dependencies (SecretStorage/jeepney, pywin32-ctypes) are not in the lock.",
+    "The vault is opt-in: until 'franco secrets migrate' runs, secrets stay in plaintext .env as before. The real macOS Keychain path (KeychainKey against the system keyring) was not exercised by automated tests; macOS may prompt once per process to allow access.",
+    "A test run during development briefly wrote a fake Gmail token to the checkout's data/gmail_token.json (no real token existed there: the file's birth time was the test run). It was deleted, and the vault tests now redirect TOKEN_FILE to a temp path.",
+    "Shared mode exposes only the allowlisted routes: outbox review, contact search, companies, capabilities, me, audit, settings and secrets. Everything else (discovery, import, campaigns, conversations, signals, start/stop, exports and more) is refused in shared mode until it is made tenant-safe.",
+    "Workers (sender, writer, handler, prospecting) are not workspace-aware: everything they create lands in the 'local' workspace, and all workspaces send through the installation's single mail identity. Other workspaces only hold data that was assigned to them directly.",
+    "Provider credentials are installation-wide, not per workspace; vault entries carry workspace_id='local'.",
+    "Shared mode re-runs init_db on every API request (a schema check), and the browser keeps the token in sessionStorage; there is no login page, sessions, password reset or SSO.",
+    "Exposing the dashboard beyond localhost stays excluded (dashboard.public): shared mode still relies on the host/origin guard and has no TLS of its own.",
+    "Running the CLI during development ('franco users list') migrated the checkout's real data/franco.db from schema v12 to v14. The migrations are additive and the app applies them on its next start anyway; the database held 0 prospects and 0 outbox rows.",
+    "Human review was by the owner (Jgomez25), stated in chat; no second reviewer."
+  ],
+  "required_configuration": []
+}

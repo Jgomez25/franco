@@ -1057,6 +1057,97 @@ def cmd_sending(args):
     asyncio.run(_run())
 
 
+def cmd_secrets(args):
+    """Encrypted credential vault: status, migrate, set, revoke, rotate."""
+    import getpass
+
+    from franco import vault as V
+    from franco.paths import PROJECT_ROOT
+
+    store = V.default_vault()
+    env_file = PROJECT_ROOT / ".env"
+    token_file = PROJECT_ROOT / "data" / "gmail_token.json"
+    action = args.secrets_action
+    try:
+        if action == "status":
+            if not store.exists():
+                print("\n  No vault yet: secrets are read from .env (plaintext)."
+                      "\n  Move them with: franco secrets migrate\n")
+                return
+            print(f"\n  Vault: {store.path} (key in the OS keychain)\n")
+            for ref in store.refs():
+                extra = f", expires {ref['expires_at']}" if ref.get("expires_at") else ""
+                print(f"    {ref['name']:24} {ref['status']:8} {ref['fingerprint']}"
+                      f"  rotated {ref.get('rotated_at') or 'never'}{extra}")
+            print()
+        elif action == "migrate":
+            moved = V.migrate_env(store, env_file, token_file)
+            print(f"\n  Moved {len(moved)} secret(s) into the vault: {', '.join(moved) or 'none'}."
+                  "\n  .env keeps their names, blank. Undo with: franco secrets unmigrate\n")
+        elif action == "unmigrate":
+            if not store.exists():
+                print("\n  No vault to undo.\n")
+                return
+            restored = V.unmigrate_env(store, env_file, token_file)
+            print(f"\n  Restored {len(restored)} secret(s) to plaintext; vault and key removed.\n")
+        elif action == "set":
+            if not args.name:
+                sys.exit("  Usage: franco secrets set NAME")
+            value = getpass.getpass(f"  Value for {args.name} (not echoed): ").strip()
+            ref = store.put(args.name, value)
+            print(f"\n  Stored {args.name} ({ref['fingerprint']}).\n")
+        elif action == "revoke":
+            if not args.name:
+                sys.exit("  Usage: franco secrets revoke NAME")
+            store.revoke(args.name)
+            print(f"\n  Revoked {args.name}: its value is destroyed. "
+                  f"Set it again to recover.\n")
+        elif action == "rotate-key":
+            count = store.rotate_key()
+            print(f"\n  Re-encrypted {count} secret(s) under a new key.\n")
+    except V.VaultError as e:
+        print(f"\n  Vault: {e}\n")
+        sys.exit(1)
+
+
+def cmd_users(args):
+    """Workspaces, members and API tokens for shared mode."""
+    from franco import tenancy as T
+    from franco.state import StateManager
+
+    async def _go():
+        state = StateManager()
+        await state.init_db()
+        store = T.TenancyStore(state)
+        if args.users_action == "list":
+            print()
+            for m in await store.members():
+                print(f"  {m['workspace_id']:16} {m['role']:8} {m['email']}"
+                      + ("  (disabled)" if m["disabled_at"] else ""))
+            print(f"\n  Mode: {T.mode()} (set FRANCO_MODE=shared to require tokens)\n")
+        elif args.users_action == "add":
+            if not args.email:
+                sys.exit("  Usage: franco users add EMAIL --workspace W --role rep|manager|admin")
+            await store.create_workspace(args.workspace)
+            user_id = await store.add_user(args.email, args.workspace, args.role)
+            token = await store.issue_token(user_id, args.workspace)
+            print(f"\n  {args.email} is a {args.role} in workspace '{args.workspace}'."
+                  f"\n  API token (shown once; store it in a password manager):\n\n    {token}\n")
+        elif args.users_action == "revoke":
+            if not args.email:
+                sys.exit("  Usage: franco users revoke EMAIL")
+            members = [m for m in await store.members() if m["email"] == args.email.lower()]
+            if not members:
+                sys.exit(f"  No user {args.email}")
+            n = await store.revoke_tokens(members[0]["user_id"])
+            print(f"\n  Revoked {n} token(s) for {args.email}.\n")
+
+    try:
+        asyncio.run(_go())
+    except ValueError as e:
+        sys.exit(f"  {e}")
+
+
 def main():
     from franco.paths import PROJECT_ROOT
     project_root = str(PROJECT_ROOT)
@@ -1241,6 +1332,21 @@ def main():
     sub.add_argument("sending_action", nargs="?", default="status",
                      choices=["pause", "resume", "status"])
     sub.set_defaults(func=cmd_sending)
+
+    # franco users
+    sub = subparsers.add_parser("users", help="Workspaces, members and API tokens")
+    sub.add_argument("users_action", nargs="?", default="list", choices=["list", "add", "revoke"])
+    sub.add_argument("email", nargs="?", default="")
+    sub.add_argument("--workspace", default="local")
+    sub.add_argument("--role", default="rep", choices=["rep", "manager", "admin"])
+    sub.set_defaults(func=cmd_users)
+
+    # franco secrets
+    sub = subparsers.add_parser("secrets", help="Encrypted credential vault")
+    sub.add_argument("secrets_action", nargs="?", default="status",
+                     choices=["status", "migrate", "unmigrate", "set", "revoke", "rotate-key"])
+    sub.add_argument("name", nargs="?", default="")
+    sub.set_defaults(func=cmd_secrets)
 
     # franco usage
     sub = subparsers.add_parser("usage", help="Show brain usage and quota (Claude or Codex)")

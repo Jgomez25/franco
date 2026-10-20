@@ -64,10 +64,11 @@ def test_every_capability_has_one_of_the_five_states():
     assert {c["state"] for c in snapshot} <= set(caps.STATES)
     assert len({c["key"] for c in snapshot}) == len(snapshot)
     # Every harness task P02..P12 that is only a blueprint today shows as preview.
-    # Team roles (P01's blueprint screen) is excluded: single operator by decision.
+    # Team roles was built in P01: unavailable in local mode, configured in shared.
     tasks = {c["task"] for c in snapshot if c["state"] == caps.PREVIEW}
     assert tasks == {f"P{i:02d}" for i in range(2, 13)}
     assert caps.evaluate("team.roles").state == caps.UNAVAILABLE
+    assert caps.evaluate("team.roles", {"franco_mode": "shared"}).state == caps.CONFIGURED
 
 
 def test_state_transitions_from_config_and_local_evidence():

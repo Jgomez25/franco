@@ -448,6 +448,113 @@ MIGRATIONS: list[str] = [
         SELECT email, 'email', 'opt_out', 'migration'
         FROM prospects WHERE status = 'opted_out' AND email != '';
     """,
+    # ── v13: durable jobs — leases, idempotency, retries, dead letters ──
+    """
+    -- One row per unit of side-effecting work. idempotency_key is unique,
+    -- so enqueueing the same work twice returns the first job. A claim is a
+    -- compare-and-set on status/lease, so two workers never run one job.
+    -- Rollback: these tables are additive; dropping them (and the outbox
+    -- 'sending' / 'needs_check' rows, which reset to 'approved') restores
+    -- v12 behaviour.
+    CREATE TABLE IF NOT EXISTS jobs (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        kind TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL DEFAULT 'queued',
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        max_attempts INTEGER NOT NULL DEFAULT 5,
+        lease_until TIMESTAMP,
+        next_attempt_at TIMESTAMP,
+        input_ref TEXT DEFAULT '',
+        result_ref TEXT DEFAULT '',
+        error_code TEXT DEFAULT '',
+        error TEXT DEFAULT '',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, next_attempt_at);
+    CREATE INDEX IF NOT EXISTS idx_jobs_kind_ref ON jobs(kind, input_ref);
+
+    CREATE TABLE IF NOT EXISTS job_attempts (
+        id TEXT PRIMARY KEY,
+        job_id TEXT NOT NULL,
+        attempt INTEGER NOT NULL,
+        outcome TEXT DEFAULT 'running',
+        error TEXT DEFAULT '',
+        started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        ended_at TIMESTAMP,
+        UNIQUE (job_id, attempt)
+    );
+    """,
+    # ── v14: tenancy — workspaces, users, roles, tokens, audit ──
+    """
+    -- Local mode (the default) uses only the 'local' workspace and its
+    -- operator; shared mode (FRANCO_MODE=shared) authenticates bearer tokens
+    -- and scopes reads and writes to the caller's workspace.
+    -- Rollback: the new tables are additive and every workspace_id defaults
+    -- to 'local', so v13 code ignores them; drop them to remove.
+    CREATE TABLE IF NOT EXISTS workspaces (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL DEFAULT '',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    INSERT OR IGNORE INTO workspaces (id, name) VALUES ('local', 'Local workspace');
+
+    CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        email TEXT NOT NULL UNIQUE,
+        display_name TEXT DEFAULT '',
+        disabled_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    INSERT OR IGNORE INTO users (id, email, display_name)
+        VALUES ('local-operator', 'operator@localhost', 'Local operator');
+
+    CREATE TABLE IF NOT EXISTS memberships (
+        workspace_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        role TEXT NOT NULL CHECK (role IN ('rep', 'manager', 'admin')),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (workspace_id, user_id)
+    );
+    INSERT OR IGNORE INTO memberships (workspace_id, user_id, role)
+        VALUES ('local', 'local-operator', 'admin');
+
+    -- Only a SHA-256 of each token is stored; the token is shown once.
+    CREATE TABLE IF NOT EXISTS api_tokens (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_used_at TIMESTAMP,
+        revoked_at TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS audit_events (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        actor_user_id TEXT DEFAULT '',
+        action TEXT NOT NULL,
+        target_type TEXT DEFAULT '',
+        target_id TEXT DEFAULT '',
+        outcome TEXT NOT NULL,
+        request_id TEXT DEFAULT '',
+        detail_json TEXT DEFAULT '{}',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_audit_ws_time ON audit_events(workspace_id, created_at);
+
+    ALTER TABLE companies ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'local';
+    ALTER TABLE prospects ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'local';
+    ALTER TABLE campaigns ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'local';
+    ALTER TABLE outbox ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'local';
+    ALTER TABLE conversations ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'local';
+    CREATE INDEX IF NOT EXISTS idx_outbox_ws ON outbox(workspace_id, status);
+    CREATE INDEX IF NOT EXISTS idx_prospects_ws ON prospects(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_companies_ws ON companies(workspace_id);
+    """,
 ]
 
 BRAIN_PROVIDERS = ("claude", "codex")
@@ -909,8 +1016,12 @@ class StateManager:
         status: str | None = None,
         due_before: str | None = None,
         limit: int = 200,
+        workspace_id: str | None = None,
     ) -> list[dict]:
         where, params = [], []
+        if workspace_id is not None:
+            where.append("workspace_id = ?")
+            params.append(workspace_id)
         if status:
             where.append("status = ?")
             params.append(status)
@@ -953,8 +1064,10 @@ class StateManager:
             )
             await db.commit()
 
-    async def approve_outbox(self, item_id: str | None = None) -> int:
-        """Approve one pending item, or ALL pending when item_id is None."""
+    async def approve_outbox(self, item_id: str | None = None,
+                             workspace_id: str | None = None) -> int:
+        """Approve one pending item, or ALL pending when item_id is None
+        (only in ``workspace_id`` when given)."""
         async with self._connect() as db:
             if item_id:
                 cursor = await db.execute(
@@ -965,8 +1078,8 @@ class StateManager:
             else:
                 cursor = await db.execute(
                     "UPDATE outbox SET status = 'approved', updated_at = ? "
-                    "WHERE status = 'pending_review'",
-                    (_utcnow().isoformat(),),
+                    "WHERE status = 'pending_review' AND (? IS NULL OR workspace_id = ?)",
+                    (_utcnow().isoformat(), workspace_id, workspace_id),
                 )
             await db.commit()
             return cursor.rowcount
@@ -1246,12 +1359,55 @@ class StateManager:
                 return (await cursor.fetchone())[0]
 
     async def count_outbox_sent_today(self) -> int:
+        """Sent today, plus sends that may have gone out ('sending' or
+        'needs_check'): an unconfirmed send still spends the daily cap."""
         async with self._connect() as db:
             async with db.execute(
-                "SELECT COUNT(*) FROM outbox WHERE status = 'sent' "
-                "AND date(sent_at) = date('now')"
+                "SELECT COUNT(*) FROM outbox WHERE (status = 'sent' "
+                "AND date(sent_at) = date('now')) OR (status IN "
+                "('sending', 'needs_check') AND date(updated_at) = date('now'))"
             ) as cursor:
                 return (await cursor.fetchone())[0]
+
+    async def resolve_needs_check(self, item_id: str, action: str) -> dict | None:
+        """An operator settles an unconfirmed send. ``sent``: they found it in
+        the Sent folder, record it without sending. ``resend``: they found it
+        missing, release it (same Message-ID). Only from 'needs_check'."""
+        if action not in ("sent", "resend"):
+            raise ValueError("action must be 'sent' or 'resend'")
+        now = _utcnow().isoformat()
+        async with self._connect() as db:
+            if action == "sent":
+                cursor = await db.execute(
+                    "UPDATE outbox SET status = 'sent', sent_at = ?, updated_at = ?, "
+                    "error = 'confirmed sent by the operator' "
+                    "WHERE id = ? AND status = 'needs_check'", (now, now, item_id))
+            else:
+                cursor = await db.execute(
+                    "UPDATE outbox SET status = 'approved', updated_at = ?, "
+                    "error = 'released by the operator after checking' "
+                    "WHERE id = ? AND status = 'needs_check'", (now, item_id))
+            await db.commit()
+        if cursor.rowcount != 1:
+            return None
+        item = await self.get_outbox_item(item_id)
+        if action == "sent" and item and item.get("prospect_id"):
+            prospect = await self.get_prospect(item["prospect_id"])
+            if prospect and prospect.status in ("new", "queued"):
+                await self.update_prospect_status(prospect.id, "contacted")
+        return item
+
+    async def mark_outbox_sending(self, item_id: str, message_id: str) -> bool:
+        """approved → sending, with the Message-ID it will carry. A
+        compare-and-set: False if the row is no longer approved."""
+        async with self._connect() as db:
+            cursor = await db.execute(
+                "UPDATE outbox SET status = 'sending', message_id = ?, error = '', "
+                "updated_at = ? WHERE id = ? AND status = 'approved'",
+                (message_id, _utcnow().isoformat(), item_id),
+            )
+            await db.commit()
+            return cursor.rowcount == 1
 
     async def find_recent_sent_to(self, email: str, days: int = 14) -> dict | None:
         """The newest email Franco actually sent to this address lately."""

@@ -231,6 +231,10 @@
     <p class="lede">What Franco can run right now. Only <b>configured</b>, <b>degraded</b> and <b>live</b> capabilities execute; <b>preview</b> exists only in the <a href="/blueprint">blueprint</a>, and <b>unavailable</b> is refused before any request leaves this machine. The dashboard stays local-only.</p>
     <div id="capabilities" aria-live="polite"><p class="muted">Checking capabilities&hellip;</p></div>
   </div>
+  <div class="card" id="secrets-card">
+    <h2>Stored credentials</h2>
+    <div id="secrets" aria-live="polite"><p class="muted">Checking the vault&hellip;</p></div>
+  </div>
   <div class="card">
     <h2>Email Provider</h2>
     <p class="lede">How Franco sends and reads replies. Active provider: <b id="active-provider">…</b> — change it by setting <span style="font-family:var(--mono);font-size:12px">channels.email.provider</span> in <span style="font-family:var(--mono);font-size:12px">franco.yaml</span> to <span style="font-family:var(--mono);font-size:12px">gmail</span>, <span style="font-family:var(--mono);font-size:12px">smtp</span>, or <span style="font-family:var(--mono);font-size:12px">instantly</span>.</p>

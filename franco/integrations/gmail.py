@@ -19,6 +19,7 @@ import json
 import logging
 import time
 import webbrowser
+from datetime import timezone
 from email.message import EmailMessage
 from email.utils import parseaddr
 
@@ -26,6 +27,9 @@ import httpx
 
 from franco.paths import PROJECT_ROOT
 from franco.integrations.mail_provider import (
+    ABSENT,
+    FOUND,
+    UNKNOWN,
     InboundMessage,
     MailProvider,
     SendResult,
@@ -44,18 +48,51 @@ LOOPBACK_PORT = 8765
 TIMEOUT = httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=10.0)
 
 
+def _vault():
+    from franco.vault import default_vault
+
+    store = default_vault()
+    return store if store.exists() else None
+
+
 def _load_token() -> dict | None:
+    """The OAuth token: from the vault once one exists, else the file."""
+    from franco.vault import GMAIL_TOKEN, VaultError, register_secret
+
+    raw = None
+    store = _vault()
     try:
-        if TOKEN_FILE.is_file():
-            data = json.loads(TOKEN_FILE.read_text())
-            if isinstance(data, dict) and data.get("refresh_token"):
-                return data
-    except (OSError, json.JSONDecodeError) as e:
+        if store is not None:
+            raw = store.get(GMAIL_TOKEN)
+        elif TOKEN_FILE.is_file():
+            raw = TOKEN_FILE.read_text()
+    except VaultError as e:
+        logger.warning(f"Gmail token unavailable: {e}")
+        return None
+    except OSError as e:
         logger.warning(f"Could not read Gmail token file: {e}")
+        return None
+    try:
+        data = json.loads(raw) if raw else None
+    except json.JSONDecodeError as e:
+        logger.warning(f"Gmail token is not valid JSON: {e}")
+        return None
+    if isinstance(data, dict) and data.get("refresh_token"):
+        register_secret(data.get("refresh_token"))
+        register_secret(data.get("access_token"))
+        return data
     return None
 
 
 def _save_token(data: dict):
+    from franco.vault import GMAIL_TOKEN, register_secret
+
+    register_secret(data.get("refresh_token"))
+    register_secret(data.get("access_token"))
+    store = _vault()
+    if store is not None:
+        store.put(GMAIL_TOKEN, json.dumps(data))
+        return
     TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
     TOKEN_FILE.write_text(json.dumps(data, indent=2))
     try:
@@ -136,12 +173,17 @@ class GmailProvider(MailProvider):
         thread_ref: str = "",
         in_reply_to: str = "",
         headers: dict[str, str] | None = None,
+        message_id: str = "",
     ) -> SendResult:
         msg = EmailMessage()
         persona = self.config.persona
         msg["To"] = to_email
         msg["From"] = f"{persona.name} <{persona.email}>" if persona.email else persona.name
         msg["Subject"] = subject
+        if message_id:
+            # Gmail is not documented to keep a client Message-ID; find_sent
+            # falls back to recipient + subject + time when it does not.
+            msg["Message-ID"] = message_id
         if in_reply_to:
             msg["In-Reply-To"] = in_reply_to
             msg["References"] = in_reply_to
@@ -154,12 +196,34 @@ class GmailProvider(MailProvider):
         if thread_ref:
             payload["threadId"] = thread_ref
 
-        data = await self._request("POST", "/messages/send", json=payload)
-        if data is None:
-            return SendResult(ok=False, error="gmail send failed")
+        token = await self._token()
+        if not token:
+            return SendResult(ok=False, error="gmail is not authorized")
+        try:
+            async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+                resp = await client.post(f"{API_BASE}/messages/send", json=payload,
+                                         headers={"Authorization": f"Bearer {token}"})
+        except httpx.ConnectError as e:
+            # Never reached Google: nothing was sent.
+            return SendResult(ok=False, error=f"gmail unreachable: {e}"[:300], retriable=True)
+        except httpx.HTTPError as e:
+            # Sent and then lost the answer: Google may have the message.
+            return SendResult(ok=False, error=f"gmail send interrupted: {e}"[:300],
+                              ambiguous=True)
+        if resp.status_code == 429:
+            return SendResult(ok=False, error="gmail rate limited", retriable=True)
+        if resp.status_code >= 500:
+            return SendResult(ok=False, error=f"gmail {resp.status_code}", ambiguous=True)
+        if resp.status_code >= 400:
+            logger.error(f"Gmail API {resp.status_code} on send: {resp.text[:200]}")
+            return SendResult(ok=False, error=f"gmail rejected the message ({resp.status_code})")
+        try:
+            data = resp.json()
+        except ValueError:
+            data = {}
 
         # Fetch the assigned RFC Message-ID for bounce/thread matching later.
-        message_id = ""
+        assigned = ""
         gmail_id = data.get("id", "")
         if gmail_id:
             meta = await self._request(
@@ -168,12 +232,36 @@ class GmailProvider(MailProvider):
             )
             for h in ((meta or {}).get("payload") or {}).get("headers", []):
                 if h.get("name", "").lower() == "message-id":
-                    message_id = h.get("value", "")
+                    assigned = h.get("value", "")
         return SendResult(
             ok=True,
-            message_id=message_id or gmail_id,
+            message_id=assigned or message_id or gmail_id,
             thread_ref=data.get("threadId", ""),
         )
+
+    async def find_sent(self, message_id: str, to_email: str = "",
+                        subject: str = "", since=None) -> str:
+        """Search the mailbox. Sent mail is in Gmail the moment send returns,
+        so an empty answer to both searches means it was not sent."""
+        queries = []
+        if message_id:
+            queries.append(f"rfc822msgid:{message_id.strip('<>')}")
+        if to_email and subject and since is not None:
+            if since.tzinfo is None:            # stored timestamps are naive UTC
+                since = since.replace(tzinfo=timezone.utc)
+            clean = subject.replace('"', " ").strip()
+            queries.append(f'in:sent to:{to_email} subject:"{clean}" '
+                           f"after:{int(since.timestamp()) - 60}")
+        if not queries:
+            return UNKNOWN
+        for q in queries:
+            listing = await self._request("GET", "/messages",
+                                          params={"q": q, "maxResults": 1})
+            if listing is None:
+                return UNKNOWN              # could not ask: never guess "absent"
+            if listing.get("messages"):
+                return FOUND
+        return ABSENT
 
     async def get_replies(self, limit: int = 50) -> list[InboundMessage]:
         listing = await self._request(
@@ -336,5 +424,6 @@ def run_auth_flow(client_id: str, client_secret: str) -> bool:
         "scope": data.get("scope", SCOPE),
         "obtained_at": int(time.time()),
     })
-    print(f"  ✓ Gmail authorized. Token stored at {TOKEN_FILE}")
+    print("  ✓ Gmail authorized. Token stored "
+          + ("in the encrypted vault" if _vault() is not None else f"at {TOKEN_FILE}"))
     return True

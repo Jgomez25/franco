@@ -28,6 +28,7 @@ def _failed(where: str, e: Exception) -> str:
     logger.exception(f"Dashboard: {where} failed: {e}")
     return f"{where} failed; see the dashboard log"
 
+from franco.jobs import JobStore  # noqa: E402
 from franco.paths import PROJECT_ROOT  # noqa: E402
 DB_PATH = PROJECT_ROOT / "data" / "franco.db"
 ENV_FILE = PROJECT_ROOT / ".env"
@@ -88,7 +89,51 @@ async def local_only(request: Request, call_next):
         elif request.headers.get("sec-fetch-site", "same-origin") not in ("same-origin", "none"):
             return PlainTextResponse("Cross-origin request refused", status_code=403)
         # No Origin and no Sec-Fetch-Site: not a browser (curl, scripts).
-    return await call_next(request)
+    if not request.url.path.startswith("/api/"):
+        return await call_next(request)          # pages and static files hold no data
+    return await _authorized(request, call_next)
+
+
+async def _authorized(request: Request, call_next):
+    """Local mode: the local operator. Shared mode: a bearer token, the
+    route allowlist, role permissions and workspace ownership, audited."""
+    from franco import tenancy as T
+
+    if T.mode() == "local":
+        request.state.principal = T.LOCAL_PRINCIPAL
+        return await call_next(request)
+
+    from franco.state import StateManager
+
+    state = StateManager(db_path=str(DB_PATH))
+    await state.init_db()
+    store = T.TenancyStore(state)
+    header = request.headers.get("authorization", "")
+    token = header[7:].strip() if header.lower().startswith("bearer ") else ""
+    principal = await store.resolve(token)
+    request_id = uuid.uuid4().hex[:12]
+    decision = await T.authorize(store, request.method, request.url.path, principal)
+    action = f"{request.method} {request.url.path}"
+    if not decision.allowed:
+        await store.audit(principal, action, "denied", request_id=request_id,
+                          detail={"status": decision.status, "reason": decision.reason})
+        return JSONResponse({"success": False, "error": decision.reason},
+                            status_code=decision.status)
+    request.state.principal = principal
+    response = await call_next(request)
+    if request.method not in SAFE_METHODS:
+        await store.audit(principal, action, "allowed", request_id=request_id,
+                          detail={"status": response.status_code})
+    return response
+
+
+def _scope(request: Request) -> str | None:
+    """The workspace a shared-mode request is confined to; None in local mode."""
+    from franco import tenancy as T
+
+    if T.mode() == "local":
+        return None
+    return request.state.principal.workspace_id
 
 # Franco process tracking
 _franco_process: subprocess.Popen | None = None
@@ -191,12 +236,15 @@ async def get_setup_status():
     # 3. Email provider configured (matches channels.email.provider)
     provider = _current_provider()
 
+    vaulted = _vault_active_names()
+
     def _has(*keys):
-        return all((env_vars.get(k, "") or os.getenv(k, "")).strip() for k in keys)
+        return all((env_vars.get(k, "") or os.getenv(k, "")).strip() or k in vaulted
+                   for k in keys)
 
     if provider == "gmail":
         provider_done = _has("GMAIL_CLIENT_ID", "GMAIL_CLIENT_SECRET") and \
-            (PROJECT_ROOT / "data" / "gmail_token.json").is_file()
+            _gmail_token_present()
         provider_help = ("Set GMAIL_CLIENT_ID/SECRET in Settings, then run "
                          "'franco gmail auth' in your terminal.")
     elif provider == "smtp":
@@ -204,7 +252,8 @@ async def get_setup_status():
         provider_help = "Enter your SMTP host, username, and password in Settings."
     else:
         instantly_key = env_vars.get("INSTANTLY_API_KEY", "") or os.getenv("INSTANTLY_API_KEY", "")
-        provider_done = bool(instantly_key) and instantly_key != "your_instantly_api_key_here"
+        provider_done = (bool(instantly_key) and instantly_key != "your_instantly_api_key_here") \
+            or "INSTANTLY_API_KEY" in vaulted
         provider_help = "Enter your Instantly API key in Settings."
     checks.append({
         "id": "email_provider", "label": f"Email provider configured ({provider})",
@@ -311,11 +360,13 @@ async def get_settings():
         if key not in env_vars:
             env_vars[key] = os.getenv(key, "")
 
-    def is_set(k):
-        return bool((env_vars.get(k) or "").strip())
+    vaulted = _vault_active_names()
 
-    # Gmail is authorized once franco gmail auth has stored a token file.
-    gmail_token = (PROJECT_ROOT / "data" / "gmail_token.json").is_file()
+    def is_set(k):
+        return bool((env_vars.get(k) or "").strip()) or k in vaulted
+
+    # Gmail is authorized once franco gmail auth has stored a token.
+    gmail_token = _gmail_token_present()
 
     return {
         "provider": _current_provider(),
@@ -362,12 +413,58 @@ async def save_env_settings(request: Request):
                 # Strip newlines so a crafted value can't inject extra .env entries
                 updates[key] = str(data[key]).replace("\n", " ").replace("\r", " ").strip()
         if updates:
+            from franco.vault import SECRET_ENV_KEYS, VaultError, default_vault
+
+            store = default_vault()
             try:
+                if store.exists():
+                    # Secrets go to the encrypted vault; .env keeps the name blank.
+                    for key in [k for k in updates if k in SECRET_ENV_KEYS and updates[k]]:
+                        store.put(key, updates.pop(key))
+                        updates[key] = ""
+                        os.environ.pop(key, None)
                 _write_env_file(updates)
+            except VaultError as e:
+                logger.warning("Failed to store a secret in the vault: %s", type(e).__name__)
+                return {"success": False, "message": "Could not store the secret in the "
+                        "vault (is the OS keychain unlocked?)."}
             except Exception as e:
                 logger.warning("Failed to write .env: %s", e)
                 return {"success": False, "message": "Could not write .env file."}
     return {"success": True}
+
+
+@app.get("/api/secrets")
+async def list_secrets():
+    """Credential references (never values) and whether the vault is in use."""
+    from franco.vault import VaultError, default_vault
+
+    store = default_vault()
+    if not store.exists():
+        return {"vault": False, "refs": []}
+    try:
+        return {"vault": True, "refs": store.refs()}
+    except VaultError as e:
+        return {"vault": True, "refs": [], "error": str(e)}
+
+
+@app.post("/api/secrets/{name}/revoke")
+async def revoke_secret(name: str):
+    """Destroy a stored credential. Re-entering it in Settings recovers."""
+    from franco.vault import CredentialMissing, VaultError, default_vault
+
+    store = default_vault()
+    if not store.exists():
+        return JSONResponse({"success": False, "message": "no vault in use"}, status_code=404)
+    try:
+        ref = store.revoke(name)
+    except CredentialMissing:
+        return JSONResponse({"success": False, "message": "no such credential"},
+                            status_code=404)
+    except VaultError as e:
+        return JSONResponse({"success": False, "message": str(e)}, status_code=409)
+    os.environ.pop(name, None)
+    return {"success": True, "ref": ref}
 
 
 @app.post("/api/settings/test-instantly")
@@ -399,22 +496,26 @@ async def test_instantly(request: Request):
 
 
 @app.get("/api/companies")
-async def get_companies():
-    """All companies with contact counts."""
+async def get_companies(request: Request):
+    """All companies with contact counts (the caller's workspace in shared mode)."""
+    ws = _scope(request)
     rows = await query_db("""
         SELECT c.*,
             (SELECT COUNT(*) FROM prospects p WHERE p.company_id = c.id) as contact_count
-        FROM companies c ORDER BY c.created_at DESC LIMIT 200
-    """)
+        FROM companies c WHERE (? IS NULL OR c.workspace_id = ?)
+        ORDER BY c.created_at DESC LIMIT 200
+    """, (ws, ws))
     return rows
 
 
 @app.get("/api/companies/{company_id}/contacts")
-async def get_company_contacts(company_id: str):
+async def get_company_contacts(company_id: str, request: Request):
     """Get all contacts for a specific company."""
+    ws = _scope(request)
     rows = await query_db(
-        "SELECT * FROM prospects WHERE company_id = ? ORDER BY score DESC",
-        (company_id,),
+        "SELECT * FROM prospects WHERE company_id = ? AND (? IS NULL OR workspace_id = ?) "
+        "ORDER BY score DESC",
+        (company_id, ws, ws),
     )
     return rows
 
@@ -744,9 +845,14 @@ async def search_contacts(
     sort: str = Query("newest", pattern="^(newest|score|name)$"),
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=100),
+    request: Request = None,
 ):
     """Search the entire local contact book, not just the latest 200 rows."""
     clauses, params = ["score >= ?"], [min_score]
+    ws = _scope(request) if request is not None else None
+    if ws is not None:
+        clauses.append("workspace_id = ?")
+        params.append(ws)
     if q.strip():
         # Literal substring matching: SQL wildcard characters are ordinary text.
         clauses.append("instr(lower(first_name || ' ' || last_name || ' ' || "
@@ -767,7 +873,8 @@ async def search_contacts(
     items = await query_db("SELECT * FROM prospects WHERE " + where +
                            " ORDER BY " + order + " LIMIT ? OFFSET ?",
                            tuple(params) + (page_size, (page - 1) * page_size))
-    industries = await query_db("SELECT DISTINCT industry FROM prospects WHERE industry != '' ORDER BY industry")
+    industries = await query_db("SELECT DISTINCT industry FROM prospects WHERE industry != '' "
+                                "AND (? IS NULL OR workspace_id = ?) ORDER BY industry", (ws, ws))
     return {"items": items, "total": total, "page": page, "page_size": page_size,
             "industries": [r["industry"] for r in industries]}
 
@@ -778,27 +885,64 @@ def _state():
 
 
 @app.get("/api/outbox")
-async def get_outbox_api():
-    """Outbox queue + kill-switch state for the Outbox tab."""
+async def get_outbox_api(request: Request):
+    """Outbox queue + kill-switch state for the Outbox tab (the caller's
+    workspace only, in shared mode)."""
     try:
         state = _state()
         await state.init_db()
+        ws = _scope(request)
         return {
             "paused": await state.get_setting("sending_paused"),
             "autopilot": await _autopilot_status(state),
             "pending": await _with_context(
-                state, await state.get_outbox(status="pending_review", limit=100)),
-            "previews": await _preview_status(state),
-            "approved": await state.get_outbox(status="approved", limit=50),
+                state, await state.get_outbox(status="pending_review", limit=100,
+                                              workspace_id=ws)),
+            # Previews are per campaign in the installation's config.
+            "previews": await _preview_status(state) if ws in (None, "local") else [],
+            "approved": await state.get_outbox(status="approved", limit=50, workspace_id=ws),
             "sent": (await query_db(
-                "SELECT * FROM outbox WHERE status = 'sent' "
-                "ORDER BY sent_at DESC LIMIT 25")),
+                "SELECT * FROM outbox WHERE status = 'sent' AND (? IS NULL OR workspace_id = ?) "
+                "ORDER BY sent_at DESC LIMIT 25", (ws, ws))),
             "failed": (await query_db(
                 "SELECT * FROM outbox WHERE status IN ('failed','rejected','cancelled') "
-                "ORDER BY updated_at DESC LIMIT 25")),
+                "AND (? IS NULL OR workspace_id = ?) ORDER BY updated_at DESC LIMIT 25",
+                (ws, ws))),
+            "needs_check": await state.get_outbox(status="needs_check", limit=50,
+                                                  workspace_id=ws),
+            "sending": await state.get_outbox(status="sending", limit=50, workspace_id=ws),
+            "dead_jobs": await JobStore(state).list(status="dead", limit=25, workspace_id=ws),
         }
     except Exception as e:
         return {"error": _failed("Get outbox api", e)}
+
+
+@app.post("/api/outbox/{item_id}/resolve")
+async def outbox_resolve(item_id: str, request: Request):
+    """Settle a send whose delivery could not be confirmed after a crash."""
+    try:
+        action = str((await request.json()).get("action", ""))
+        if action not in ("sent", "resend"):
+            return JSONResponse({"success": False, "message": "action must be sent or resend"},
+                                status_code=400)
+        state = _state()
+        await state.init_db()
+        item = await state.resolve_needs_check(item_id, action)
+        if item is None:
+            return JSONResponse({"success": False, "message":
+                                 "that email is not waiting for a check"}, status_code=409)
+        jobs = JobStore(state)
+        job = await jobs.get_by_key(f"email.send:{item_id}")
+        if job and action == "resend":
+            await jobs.requeue(job["id"])
+        elif job:
+            await jobs.finish(job["id"], job["attempt_count"], "succeeded",
+                              "operator_confirmed", result_ref=item.get("message_id", ""))
+        await state.log_action(action_type="outbox_resolved", agent="dashboard",
+                               details={"id": item_id, "action": action})
+        return {"success": True, "status": item["status"]}
+    except Exception as e:
+        return _server_error("Outbox resolve", e)
 
 
 def _outreach_config():
@@ -996,11 +1140,11 @@ async def suppressions_export():
 
 
 @app.post("/api/outbox/approve-all")
-async def outbox_approve_all():
+async def outbox_approve_all(request: Request):
     try:
         state = _state()
         await state.init_db()
-        n = await state.approve_outbox()
+        n = await state.approve_outbox(workspace_id=_scope(request))
         return {"success": True, "approved": n}
     except Exception as e:
         return _server_error("Outbox approve all", e)
@@ -1619,7 +1763,57 @@ async def get_runs_api():
         return {"error": _failed("Get runs api", e)}
 
 
+# ── Identity and audit ──
+
+
+@app.get("/api/me")
+async def whoami(request: Request):
+    from franco import tenancy as T
+
+    p = request.state.principal
+    return {"mode": T.mode(), "user_id": p.user_id, "email": p.email,
+            "workspace_id": p.workspace_id, "role": p.role}
+
+
+@app.get("/api/audit")
+async def audit_log(request: Request, limit: int = Query(100, ge=1, le=500)):
+    """Audit events for the caller's workspace (managers and admins)."""
+    from franco import tenancy as T
+
+    principal = request.state.principal
+    if not principal.holds("audit.read"):
+        return JSONResponse({"success": False, "error": "not allowed"}, status_code=403)
+    state = _state()
+    await state.init_db()
+    return {"events": await T.TenancyStore(state).audit_events(principal.workspace_id, limit)}
+
+
 # ── Capabilities: what can run, what is a preview, and why ──
+
+
+def _vault_active_names() -> set[str]:
+    """Credentials held in the vault. Reads references only: no keychain."""
+    from franco.vault import default_vault
+
+    store = default_vault()
+    try:
+        return {r["name"] for r in store.refs() if r["status"] == "active"} \
+            if store.exists() else set()
+    except Exception:
+        return set()
+
+
+def _gmail_token_present() -> bool:
+    from franco.vault import GMAIL_TOKEN, default_vault
+
+    store = default_vault()
+    if store.exists():
+        try:
+            return any(r["name"] == GMAIL_TOKEN and r["status"] == "active"
+                       for r in store.refs())
+        except Exception:
+            return False
+    return (PROJECT_ROOT / "data" / "gmail_token.json").is_file()
 
 
 def _capability_env() -> dict:
@@ -1628,7 +1822,7 @@ def _capability_env() -> dict:
     env = current_env()
     # A value just saved in Settings counts even before a restart.
     env.update({k.lower(): v for k, v in _read_env_file().items() if v})
-    env["_gmail_token"] = (PROJECT_ROOT / "data" / "gmail_token.json").is_file()
+    env["_gmail_token"] = _gmail_token_present()
     return env
 
 
@@ -1654,7 +1848,8 @@ async def get_capabilities():
     try:
         state = _state()
         await state.init_db()
-        facts = await caps.gather_facts(state, PROJECT_ROOT / "data" / "gmail_token.json")
+        facts = await caps.gather_facts(state)
+        facts["gmail_token"] = env["_gmail_token"]
     except Exception as e:
         # Without health facts the states can only be preview/unavailable/
         # configured; say so instead of implying everything is fine.
