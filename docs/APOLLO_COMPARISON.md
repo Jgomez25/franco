@@ -39,14 +39,14 @@ Saved views are browser-local filter presets, not shared lists. Selection persis
 ## Run locally
 
 Checkout:
-`/Users/jorge/Documents/Codex/2026-10-20/clone-this/github/franco`
+`/Users/jorge/Documents/github/franco`
 
 ```sh
-cd /Users/jorge/Documents/Codex/2026-10-20/clone-this/github/franco
+cd /Users/jorge/Documents/github/franco
 .venv/bin/python -m uvicorn franco.dashboard:app --host 127.0.0.1 --port 5555
 ```
 
-Open http://127.0.0.1:5555. Use Settings and the existing setup checklist to configure your product and providers. No outreach has been sent. No deployment or push was performed. The later blueprint/harness change includes this work in a local commit.
+Open http://127.0.0.1:5555. Use Settings and the existing setup checklist to configure your product and providers. No outreach has been sent. The dashboard upgrades and later blueprint/harness work are committed and pushed to the GitHub repository. No deployment was performed.
 
 ## Validation
 
