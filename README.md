@@ -1,5 +1,7 @@
 # Franco
 
+See the [session guide](docs/SESSION_GUIDE.md) for the sales workspace upgrades, interactive feature blueprint, Apollo comparison, and LLM implementation harness.
+
 **An outbound sales agent that runs on your own machine, on the Claude Code or Codex subscription you already pay for.**
 
 Franco works through a list of accounts. For each one it finds or imports a reason to write, sends a short email sequence from your own mailbox, reads the replies, and handles them. Every fact it uses is recorded with its source. You review every email before it sends, unless you turn on autopilot.

@@ -37,7 +37,7 @@ python3 harness/parity/run.py next
 - `test_harness.py`: harness behavior tests using the standard library.
 
 ## Preview
-Run Franco's local server and open `/blueprint`, or open the packaged standalone `franco-blueprint.html`. The demo uses fictional data and page-memory state. Export saves prototype choices, not production configuration. Sample calls, bookings, enrichments and AI output are simulations.
+Run Franco's local server and open `/blueprint`, or open [the standalone preview](../../docs/session-deliverables/franco-blueprint.html) in a browser. The [session guide](../../docs/SESSION_GUIDE.md) links all documents and downloadable deliverables. The demo uses fictional data and page-memory state. Export saves prototype choices, not production configuration. Sample calls, bookings, enrichments and AI output are simulations.
 
 ## Owner decisions before provider work
 Choose internal-use versus customer-facing SaaS; supported regions; data provider and permitted data uses; first CRM; mailbox provider; telephony provider; calendar provider; infrastructure and identity service; target volumes; retention policy; quality thresholds; and budget limits. Record these in P00. Credentials belong in environment/secret management, not prompts, task files, browser code or evidence logs.
