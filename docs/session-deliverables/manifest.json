@@ -6,11 +6,11 @@
     "docs/APOLLO_COMPARISON.md": "87c39669c1244337c14b04dc05bca2ffe18d37e0a40a217b5f1f3240ef0326b6",
     "docs/PARITY_ROADMAP.md": "7d6335a4bfbd6db72aa31ebffd496c17967d38e88135803234c5539ab5d3e221",
     "docs/SESSION_GUIDE.md": "5795d5afbd917ee7c20cb5cdec031cebf878b425a3340548261b3645f6e5d91b",
-    "docs/session-deliverables/START-HERE-LLM-PROMPT.md": "3037adb600068affedde46f8571f4873a405f1fbb22a0302a2893b7a7e858a73",
+    "docs/session-deliverables/START-HERE-LLM-PROMPT.md": "4d93219712a5410a06ae44dd7520c21211aef705258d4acbaec81ccf4120c156",
     "docs/session-deliverables/franco-blueprint.html": "3d9834839771dac206de4c2c44006cc2a7a1acdb147207dff0ef749b37ab6085",
     "docs/session-deliverables/franco-blueprint.jpg": "984a48a8d2d722789b79c5e00bd05ef538639af913c9f6b7d4a6204a5114c5a4",
     "docs/session-deliverables/franco-comparison.md": "87c39669c1244337c14b04dc05bca2ffe18d37e0a40a217b5f1f3240ef0326b6",
-    "docs/session-deliverables/franco-llm-harness.zip": "27059511fac4666309d808f00695d46c7a3f31738b3fd9515a1107b34efc6b51",
+    "docs/session-deliverables/franco-llm-harness.zip": "df2fc8ce7dfc8a2a2a3bbfcc50a7f2aeacea94643d9398edf8e77e9479fa5aab",
     "docs/session-deliverables/franco-parity-roadmap.md": "7d6335a4bfbd6db72aa31ebffd496c17967d38e88135803234c5539ab5d3e221",
     "docs/session-deliverables/franco-workspace.jpg": "2cd4e317db31805ccffd4b9ca86df6321b4f35a0183daccfbca284211dd9901f",
     "franco/dashboard.py": "b6faea1c7ba2d631b04a51207de93e8b2cff95a6470aeeebebd0b168aca1fc1a",
@@ -29,7 +29,7 @@
     "harness/parity/run.py": "6c738e6a85cbece7534b6584563d0f5cd145dfda1ea919d931db9653928754f4",
     "harness/parity/tasks.json": "a3551f11a6f2d9e18a160e1a5632348f430f359a8aa45dd4e78921e0174713a1",
     "harness/parity/test_harness.py": "dac640fcac8dab195f559b4fefd19abb6ff2dea07e51b172964daa9addae000d",
-    "scripts/package_parity.py": "0832da3c382b7e067c011141712a0324b34a09f7b1da4fc89acd4296f0e2bd3f",
+    "scripts/package_parity.py": "c5bf39c05ff81e77a60413fd86e68abc45c8e0396d38aa9dc90421295aaa7cfa",
     "tests/contact_workspace.test.cjs": "a65e42e8935d823bdb512befe3d11231d3be5c7e7cb61b0e03c4818b4a8d6af2",
     "tests/test_contact_workspace.py": "0720b8efc8adf6452f5ebf40edbbc3d81aef1094bc39fab7a89e6c68c651a1c6"
   }

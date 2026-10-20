@@ -64,4 +64,3 @@ EVIDENCE FORMAT
   "limitations": [],
   "required_configuration": []
 }
-

@@ -21,7 +21,7 @@ def artifacts():
     generated = {
         'franco-blueprint.html': html.encode(),
         'START-HERE-LLM-PROMPT.md': subprocess.check_output(
-            [sys.executable, str(ROOT / 'harness/parity/run.py'), 'prompt', 'P00'], cwd=ROOT),
+            [sys.executable, str(ROOT / 'harness/parity/run.py'), 'prompt', 'P00'], cwd=ROOT).rstrip() + b'\n',
         'franco-comparison.md': (ROOT / 'docs/APOLLO_COMPARISON.md').read_bytes(),
         'franco-parity-roadmap.md': (ROOT / 'docs/PARITY_ROADMAP.md').read_bytes(),
     }
