@@ -4,7 +4,7 @@
   "verification": "mocked",
   "commit": "",
   "reviewer": "",
-  "summary": "In progress. Slice 1 of 3 (durable sends) is done. Adds a generic durable job store (migration v13: jobs and job_attempts, unique idempotency keys, compare-and-set claims with leases, exponential backoff, retry budgets, dead letters, requeue). Email dispatch now runs through it: the job lease, outbox 'sending' and a per-item Message-ID are committed before the provider is called. On restart, expired leases are reconciled through the new MailProvider.find_sent (found / absent / unknown), never resent blind; unknown becomes 'needs_check' for the operator, resolvable in the Outbox tab. Slice 2 (secrets) is done: franco/vault.py stores each credential AES-256-GCM encrypted (name bound as AAD) in data/vault.json (0600, atomic writes) with a random 32-byte key kept only in the OS keychain via keyring. Entries are credential references (workspace, fingerprint, created/rotated/revoked/expires). load_env fills secrets from the vault and reports revoked/expired/locked ones, which capability reasons surface. The Gmail OAuth token moves into the vault. A log-record factory redacts every registered secret from every record. Key rotation is crash-recoverable via a key id and backup. 'franco secrets migrate|unmigrate|set|revoke|rotate-key|status', GET /api/secrets and POST /api/secrets/{name}/revoke, and a Settings card. Slice 3 (workspace, user, membership, roles, audit events, tenant scoping alongside local single-user mode) are not built yet.",
+  "summary": "Three slices. (1) Durable jobs (migration v13: jobs + job_attempts with unique idempotency keys, leased compare-and-set claims, exponential backoff, retry budgets, dead letters, requeue) and crash-safe email dispatch: the job lease, outbox 'sending' and a per-item Message-ID are committed before the provider is called; expired leases are reconciled through MailProvider.find_sent (found / absent / unknown), never resent blind, and unknown becomes 'needs_check' for the operator. (2) Encrypted credential vault: AES-256-GCM per credential (name as AAD) in data/vault.json, key only in the OS keychain via keyring; credential references with fingerprint, rotation, expiry and revocation; crash-recoverable key rotation; secret redaction in the log-record factory; reversible migration from .env; CLI, API and Settings card. (3) Tenancy (migration v14): workspaces, users, memberships (rep/manager/admin), hashed bearer tokens, audit events, and workspace_id on companies, prospects, campaigns, outbox and conversations. Local mode (the default) is unchanged and separately tested. Shared mode (FRANCO_MODE=shared) authenticates tokens and applies a server-side route allowlist with role permissions and workspace ownership checks (another workspace's record answers 404); every unlisted API route is refused; credential management needs admin of the installation workspace; denials and allowed mutations are audited. Owner decisions 2026-10-20: build tenancy anyway; encrypted file plus keychain key; durable sends first. All three acceptance criteria have passing mocked tests; the task stays incomplete until an independent human review.",
   "tests": [
     {
       "command": ".venv/bin/python -m pytest tests/test_p01_durable_sends.py -q -p no:cacheprovider",
@@ -30,12 +30,22 @@
       "command": ".venv/bin/python -m pytest tests/test_config.py tests/test_config_extra.py tests/test_email_wiring.py tests/test_discover.py tests/test_p00_capabilities.py tests/test_p01_durable_sends.py tests/test_p01_vault.py tests/test_code_scanning_fixes.py -q -p no:cacheprovider",
       "exit_code": 0,
       "log": "harness/parity/evidence/logs/P01-targeted-3.log (183 passed)"
+    },
+    {
+      "command": ".venv/bin/python -m pytest tests/test_p01_tenancy.py -q -p no:cacheprovider",
+      "exit_code": 0,
+      "log": "harness/parity/evidence/logs/P01-tenancy.log (15 passed)"
+    },
+    {
+      "command": ".venv/bin/python -m pytest -q -p no:cacheprovider",
+      "exit_code": 0,
+      "log": "harness/parity/evidence/logs/P01-full-suite.log (703 passed, 20 skipped: environment-gated Codex CLI and packaging tests)"
     }
   ],
   "criteria": {
     "P01-A1": {
-      "result": "incomplete",
-      "evidence": "Not built yet (slice 3: tenancy and roles)."
+      "result": "passed",
+      "evidence": "tests/test_p01_tenancy.py, end to end through the dashboard HTTP layer in shared mode with three workspaces. Cross-tenant IDs: a rep in 'acme' calling approve/reject/edit/resolve on a 'globex' outbox item, or reading a 'globex' company's contacts, gets 404; the item stays pending_review; 5 'denied' audit events are written to acme naming the target, none into globex. Lists (outbox, contact search, companies) return only the caller's workspace, and bulk approval needs a manager and stays inside the workspace. Credentials: a rep, a manager and another workspace's admin each get 403 on POST /api/settings/env, POST /api/settings/test-instantly (zero external requests), GET /api/settings, GET /api/secrets and POST /api/secrets/{name}/revoke; .env is not written; each denial is audited. The installation admin succeeds. Also covered: missing, wrong and revoked tokens and disabled users get 401; tokens are stored only as SHA-256 hashes; every API route not on the allowlist answers 403 in shared mode, even for the installation admin; every allowlisted route exists; the audit log is manager+ and workspace-scoped; local mode needs no token, keeps every route and the localhost guard."
     },
     "P01-A2": {
       "result": "passed",
@@ -52,10 +62,15 @@
     "The SMTP adapter only answers FOUND or UNKNOWN (IMAP Sent-folder search), so any SMTP crash mid-send ends in needs_check for the operator.",
     "The legacy Instantly path (campaign deploy and lead upload) is not on the durable job store.",
     "Confirming a needs_check item as sent from the dashboard does not re-time later sequence steps; they keep their staged schedule.",
-    "Owner decision 2026-10-20: build tenancy anyway, despite the single-operator deployment. The matrix still lists team.roles as excluded and must be updated when slice 3 lands.",
     "New runtime dependencies cryptography 47.0.0 and keyring 25.7.0 (plus cffi, pycparser, jaraco-*, more-itertools) were added to pyproject, requirements.in and the hashed lock. The lock was regenerated with pip-compile on macOS / Python 3.12 (the documented command uses Python 3.11 via uvx, which is not installed), so keyring's Linux and Windows-only dependencies (SecretStorage/jeepney, pywin32-ctypes) are not in the lock.",
     "The vault is opt-in: until 'franco secrets migrate' runs, secrets stay in plaintext .env as before. The real macOS Keychain path (KeychainKey against the system keyring) was not exercised by automated tests; macOS may prompt once per process to allow access.",
-    "A test run during development briefly wrote a fake Gmail token to the checkout's data/gmail_token.json (no real token existed there: the file's birth time was the test run). It was deleted, and the vault tests now redirect TOKEN_FILE to a temp path."
+    "A test run during development briefly wrote a fake Gmail token to the checkout's data/gmail_token.json (no real token existed there: the file's birth time was the test run). It was deleted, and the vault tests now redirect TOKEN_FILE to a temp path.",
+    "Shared mode exposes only the allowlisted routes: outbox review, contact search, companies, capabilities, me, audit, settings and secrets. Everything else (discovery, import, campaigns, conversations, signals, start/stop, exports and more) is refused in shared mode until it is made tenant-safe.",
+    "Workers (sender, writer, handler, prospecting) are not workspace-aware: everything they create lands in the 'local' workspace, and all workspaces send through the installation's single mail identity. Other workspaces only hold data that was assigned to them directly.",
+    "Provider credentials are installation-wide, not per workspace; vault entries carry workspace_id='local'.",
+    "Shared mode re-runs init_db on every API request (a schema check), and the browser keeps the token in sessionStorage; there is no login page, sessions, password reset or SSO.",
+    "Exposing the dashboard beyond localhost stays excluded (dashboard.public): shared mode still relies on the host/origin guard and has no TLS of its own.",
+    "Running the CLI during development ('franco users list') migrated the checkout's real data/franco.db from schema v12 to v14. The migrations are additive and the app applies them on its next start anyway; the database held 0 prospects and 0 outbox rows."
   ],
   "required_configuration": []
 }

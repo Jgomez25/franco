@@ -487,6 +487,74 @@ MIGRATIONS: list[str] = [
         UNIQUE (job_id, attempt)
     );
     """,
+    # ── v14: tenancy — workspaces, users, roles, tokens, audit ──
+    """
+    -- Local mode (the default) uses only the 'local' workspace and its
+    -- operator; shared mode (FRANCO_MODE=shared) authenticates bearer tokens
+    -- and scopes reads and writes to the caller's workspace.
+    -- Rollback: the new tables are additive and every workspace_id defaults
+    -- to 'local', so v13 code ignores them; drop them to remove.
+    CREATE TABLE IF NOT EXISTS workspaces (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL DEFAULT '',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    INSERT OR IGNORE INTO workspaces (id, name) VALUES ('local', 'Local workspace');
+
+    CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        email TEXT NOT NULL UNIQUE,
+        display_name TEXT DEFAULT '',
+        disabled_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    INSERT OR IGNORE INTO users (id, email, display_name)
+        VALUES ('local-operator', 'operator@localhost', 'Local operator');
+
+    CREATE TABLE IF NOT EXISTS memberships (
+        workspace_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        role TEXT NOT NULL CHECK (role IN ('rep', 'manager', 'admin')),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (workspace_id, user_id)
+    );
+    INSERT OR IGNORE INTO memberships (workspace_id, user_id, role)
+        VALUES ('local', 'local-operator', 'admin');
+
+    -- Only a SHA-256 of each token is stored; the token is shown once.
+    CREATE TABLE IF NOT EXISTS api_tokens (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_used_at TIMESTAMP,
+        revoked_at TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS audit_events (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        actor_user_id TEXT DEFAULT '',
+        action TEXT NOT NULL,
+        target_type TEXT DEFAULT '',
+        target_id TEXT DEFAULT '',
+        outcome TEXT NOT NULL,
+        request_id TEXT DEFAULT '',
+        detail_json TEXT DEFAULT '{}',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_audit_ws_time ON audit_events(workspace_id, created_at);
+
+    ALTER TABLE companies ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'local';
+    ALTER TABLE prospects ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'local';
+    ALTER TABLE campaigns ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'local';
+    ALTER TABLE outbox ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'local';
+    ALTER TABLE conversations ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'local';
+    CREATE INDEX IF NOT EXISTS idx_outbox_ws ON outbox(workspace_id, status);
+    CREATE INDEX IF NOT EXISTS idx_prospects_ws ON prospects(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_companies_ws ON companies(workspace_id);
+    """,
 ]
 
 BRAIN_PROVIDERS = ("claude", "codex")
@@ -948,8 +1016,12 @@ class StateManager:
         status: str | None = None,
         due_before: str | None = None,
         limit: int = 200,
+        workspace_id: str | None = None,
     ) -> list[dict]:
         where, params = [], []
+        if workspace_id is not None:
+            where.append("workspace_id = ?")
+            params.append(workspace_id)
         if status:
             where.append("status = ?")
             params.append(status)
@@ -992,8 +1064,10 @@ class StateManager:
             )
             await db.commit()
 
-    async def approve_outbox(self, item_id: str | None = None) -> int:
-        """Approve one pending item, or ALL pending when item_id is None."""
+    async def approve_outbox(self, item_id: str | None = None,
+                             workspace_id: str | None = None) -> int:
+        """Approve one pending item, or ALL pending when item_id is None
+        (only in ``workspace_id`` when given)."""
         async with self._connect() as db:
             if item_id:
                 cursor = await db.execute(
@@ -1004,8 +1078,8 @@ class StateManager:
             else:
                 cursor = await db.execute(
                     "UPDATE outbox SET status = 'approved', updated_at = ? "
-                    "WHERE status = 'pending_review'",
-                    (_utcnow().isoformat(),),
+                    "WHERE status = 'pending_review' AND (? IS NULL OR workspace_id = ?)",
+                    (_utcnow().isoformat(), workspace_id, workspace_id),
                 )
             await db.commit()
             return cursor.rowcount

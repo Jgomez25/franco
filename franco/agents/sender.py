@@ -522,7 +522,8 @@ class Sender:
     async def _claim_send(self, item: dict, message_id: str):
         """(job_id, attempt) once this worker owns the send, else None."""
         job = await self.jobs.enqueue(SEND_JOB, f"{SEND_JOB}:{item['id']}",
-                                      input_ref=item["id"])
+                                      input_ref=item["id"],
+                                      workspace_id=item.get("workspace_id") or "local")
         leased = await self.jobs.claim(job["id"], lease_seconds=self.lease_seconds)
         if leased is None:
             return None        # in flight elsewhere, backing off, or finished

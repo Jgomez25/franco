@@ -20,8 +20,8 @@ The live view of this matrix is `GET /api/capabilities` and **Settings → Capab
 
 | Dimension | Supported now | Notes |
 |---|---|---|
-| Deployment | Single operator, one machine, dashboard on `127.0.0.1` only | **Decided 2026-10-20:** internal use by one operator. No login, no tenancy; `dashboard.public` is excluded. |
-| User roles | One: the local operator (full control) | **Decided:** team roles are excluded (`team.roles`). |
+| Deployment | Single operator, one machine, dashboard on `127.0.0.1` only | **Decided 2026-10-20:** internal use by one operator. Local mode has no login; `dashboard.public` stays excluded either way. |
+| User roles | Local mode: one operator (full control). Shared mode (`FRANCO_MODE=shared`): rep, manager, admin per workspace, bearer tokens | **Decided 2026-10-20:** build tenancy (P01) even though the deployment stays single-operator. Shared mode is opt-in; local mode is unchanged. |
 | Channel | Email only | SMS/WhatsApp is excluded. Calling is `preview` (P04). |
 | Mail providers | Gmail/Workspace (OAuth), SMTP+IMAP, Instantly (legacy) | One is active per `channels.email.provider`. |
 | Verification | Reoon, ZeroBounce, Hunter | Without one, addresses stay `guess` and are never sent. |
@@ -56,7 +56,6 @@ A capability leaves `preview` only when its task's implementation and verificati
 | `mailbox.warming` | Inbox warming networks | They fake engagement. |
 | `channel.sms` | SMS / WhatsApp outreach | Email is the only channel in scope. |
 | `dashboard.public` | Serving the dashboard beyond localhost | Single-operator local app; there is no login. |
-| `team.roles` | Team accounts, roles, shared access | Single operator by owner decision. |
 
 ## Fixtures never reach outreach (P00-A2)
 
@@ -115,7 +114,7 @@ The import is slow because it opens about 5.6 SQLite connections and commits onc
 
 Decided on 2026-10-20:
 
-1. **Deployment:** internal use, one operator, localhost only.
+1. **Deployment:** internal use, one operator, localhost only. Tenancy is built anyway (P01, owner decision later the same day) and stays off unless `FRANCO_MODE=shared`.
 2. **Regions:** United States only.
 3. **Volume:** up to 50 cold emails a day.
 4. **Benchmark:** the gates above, as proposed.

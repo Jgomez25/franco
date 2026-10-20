@@ -327,6 +327,9 @@ franco signals               # The signal vocabulary; --confirm / --reject CODES
 franco discover              # Find businesses; --providers / --estimate / --provider <key>
 franco autopilot on|off|default|status  # Send without review (runtime toggle)
 franco sending pause|resume  # Kill switch for all outbound
+franco secrets status|migrate|unmigrate|set|revoke|rotate-key  # Encrypted vault (key in the OS keychain)
+franco users list|add EMAIL --workspace W --role rep|manager|admin|revoke EMAIL  # Shared mode (FRANCO_MODE=shared)
+python -m franco.benchmark   # P00 synthetic 100-contact benchmark (throwaway DB)
 ```
 
 ### Common Issues

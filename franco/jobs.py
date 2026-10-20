@@ -196,8 +196,11 @@ class JobStore:
                 return [dict(r) for r in await cur.fetchall()]
 
     async def list(self, status: str | None = None, kind: str | None = None,
-                   limit: int = 100) -> list[dict]:
+                   limit: int = 100, workspace_id: str | None = None) -> list[dict]:
         where, params = [], []
+        if workspace_id is not None:
+            where.append("workspace_id = ?")
+            params.append(workspace_id)
         if status:
             where.append("status = ?")
             params.append(status)

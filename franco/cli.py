@@ -1110,6 +1110,44 @@ def cmd_secrets(args):
         sys.exit(1)
 
 
+def cmd_users(args):
+    """Workspaces, members and API tokens for shared mode."""
+    from franco import tenancy as T
+    from franco.state import StateManager
+
+    async def _go():
+        state = StateManager()
+        await state.init_db()
+        store = T.TenancyStore(state)
+        if args.users_action == "list":
+            print()
+            for m in await store.members():
+                print(f"  {m['workspace_id']:16} {m['role']:8} {m['email']}"
+                      + ("  (disabled)" if m["disabled_at"] else ""))
+            print(f"\n  Mode: {T.mode()} (set FRANCO_MODE=shared to require tokens)\n")
+        elif args.users_action == "add":
+            if not args.email:
+                sys.exit("  Usage: franco users add EMAIL --workspace W --role rep|manager|admin")
+            await store.create_workspace(args.workspace)
+            user_id = await store.add_user(args.email, args.workspace, args.role)
+            token = await store.issue_token(user_id, args.workspace)
+            print(f"\n  {args.email} is a {args.role} in workspace '{args.workspace}'."
+                  f"\n  API token (shown once; store it in a password manager):\n\n    {token}\n")
+        elif args.users_action == "revoke":
+            if not args.email:
+                sys.exit("  Usage: franco users revoke EMAIL")
+            members = [m for m in await store.members() if m["email"] == args.email.lower()]
+            if not members:
+                sys.exit(f"  No user {args.email}")
+            n = await store.revoke_tokens(members[0]["user_id"])
+            print(f"\n  Revoked {n} token(s) for {args.email}.\n")
+
+    try:
+        asyncio.run(_go())
+    except ValueError as e:
+        sys.exit(f"  {e}")
+
+
 def main():
     from franco.paths import PROJECT_ROOT
     project_root = str(PROJECT_ROOT)
@@ -1294,6 +1332,14 @@ def main():
     sub.add_argument("sending_action", nargs="?", default="status",
                      choices=["pause", "resume", "status"])
     sub.set_defaults(func=cmd_sending)
+
+    # franco users
+    sub = subparsers.add_parser("users", help="Workspaces, members and API tokens")
+    sub.add_argument("users_action", nargs="?", default="list", choices=["list", "add", "revoke"])
+    sub.add_argument("email", nargs="?", default="")
+    sub.add_argument("--workspace", default="local")
+    sub.add_argument("--role", default="rep", choices=["rep", "manager", "admin"])
+    sub.set_defaults(func=cmd_users)
 
     # franco secrets
     sub = subparsers.add_parser("secrets", help="Encrypted credential vault")

@@ -108,6 +108,10 @@ _STATIC: tuple[Capability, ...] = (
                env_keys=("linkedin_email", "linkedin_password")),
     Capability("training.cloudflare", "Cloudflare deep crawling for training", "training", True,
                env_keys=("cloudflare_account_id", "cloudflare_api_token")),
+    # Built in P01; off unless the operator opts into shared mode.
+    Capability("team.roles", "Workspaces, roles and API tokens (shared mode)", "administration",
+               True, env_keys=("franco_mode",),
+               configured=lambda env: str(env.get("franco_mode") or "").lower() == "shared"),
     # Blueprint-only: simulated in franco/web/blueprint.*, no production code.
     Capability("data.licensed", "Licensed contact database and waterfall enrichment", "data", False, task="P02"),
     Capability("sequences.multichannel", "Multi-channel sequence builder", "sequences", False, task="P03"),
@@ -130,8 +134,6 @@ _STATIC: tuple[Capability, ...] = (
     Capability("dashboard.public", "Dashboard reachable beyond localhost", "administration", False,
                excluded="Franco is a single-operator local app (owner decision, 2026-10-20); "
                         "the dashboard has no login and stays on localhost."),
-    Capability("team.roles", "Team roles, permissions and shared access", "administration", False,
-               excluded="Single operator by owner decision (2026-10-20); no team accounts."),
 )
 
 
@@ -220,7 +222,7 @@ def current_env() -> dict:
     from franco.config import load_env
 
     env = load_env().model_dump()
-    for name in ("cloudflare_account_id", "cloudflare_api_token"):
+    for name in ("cloudflare_account_id", "cloudflare_api_token", "franco_mode"):
         env.setdefault(name, os.getenv(name.upper(), ""))
     return env
 

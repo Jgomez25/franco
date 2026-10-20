@@ -89,7 +89,51 @@ async def local_only(request: Request, call_next):
         elif request.headers.get("sec-fetch-site", "same-origin") not in ("same-origin", "none"):
             return PlainTextResponse("Cross-origin request refused", status_code=403)
         # No Origin and no Sec-Fetch-Site: not a browser (curl, scripts).
-    return await call_next(request)
+    if not request.url.path.startswith("/api/"):
+        return await call_next(request)          # pages and static files hold no data
+    return await _authorized(request, call_next)
+
+
+async def _authorized(request: Request, call_next):
+    """Local mode: the local operator. Shared mode: a bearer token, the
+    route allowlist, role permissions and workspace ownership, audited."""
+    from franco import tenancy as T
+
+    if T.mode() == "local":
+        request.state.principal = T.LOCAL_PRINCIPAL
+        return await call_next(request)
+
+    from franco.state import StateManager
+
+    state = StateManager(db_path=str(DB_PATH))
+    await state.init_db()
+    store = T.TenancyStore(state)
+    header = request.headers.get("authorization", "")
+    token = header[7:].strip() if header.lower().startswith("bearer ") else ""
+    principal = await store.resolve(token)
+    request_id = uuid.uuid4().hex[:12]
+    decision = await T.authorize(store, request.method, request.url.path, principal)
+    action = f"{request.method} {request.url.path}"
+    if not decision.allowed:
+        await store.audit(principal, action, "denied", request_id=request_id,
+                          detail={"status": decision.status, "reason": decision.reason})
+        return JSONResponse({"success": False, "error": decision.reason},
+                            status_code=decision.status)
+    request.state.principal = principal
+    response = await call_next(request)
+    if request.method not in SAFE_METHODS:
+        await store.audit(principal, action, "allowed", request_id=request_id,
+                          detail={"status": response.status_code})
+    return response
+
+
+def _scope(request: Request) -> str | None:
+    """The workspace a shared-mode request is confined to; None in local mode."""
+    from franco import tenancy as T
+
+    if T.mode() == "local":
+        return None
+    return request.state.principal.workspace_id
 
 # Franco process tracking
 _franco_process: subprocess.Popen | None = None
@@ -452,22 +496,26 @@ async def test_instantly(request: Request):
 
 
 @app.get("/api/companies")
-async def get_companies():
-    """All companies with contact counts."""
+async def get_companies(request: Request):
+    """All companies with contact counts (the caller's workspace in shared mode)."""
+    ws = _scope(request)
     rows = await query_db("""
         SELECT c.*,
             (SELECT COUNT(*) FROM prospects p WHERE p.company_id = c.id) as contact_count
-        FROM companies c ORDER BY c.created_at DESC LIMIT 200
-    """)
+        FROM companies c WHERE (? IS NULL OR c.workspace_id = ?)
+        ORDER BY c.created_at DESC LIMIT 200
+    """, (ws, ws))
     return rows
 
 
 @app.get("/api/companies/{company_id}/contacts")
-async def get_company_contacts(company_id: str):
+async def get_company_contacts(company_id: str, request: Request):
     """Get all contacts for a specific company."""
+    ws = _scope(request)
     rows = await query_db(
-        "SELECT * FROM prospects WHERE company_id = ? ORDER BY score DESC",
-        (company_id,),
+        "SELECT * FROM prospects WHERE company_id = ? AND (? IS NULL OR workspace_id = ?) "
+        "ORDER BY score DESC",
+        (company_id, ws, ws),
     )
     return rows
 
@@ -797,9 +845,14 @@ async def search_contacts(
     sort: str = Query("newest", pattern="^(newest|score|name)$"),
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=100),
+    request: Request = None,
 ):
     """Search the entire local contact book, not just the latest 200 rows."""
     clauses, params = ["score >= ?"], [min_score]
+    ws = _scope(request) if request is not None else None
+    if ws is not None:
+        clauses.append("workspace_id = ?")
+        params.append(ws)
     if q.strip():
         # Literal substring matching: SQL wildcard characters are ordinary text.
         clauses.append("instr(lower(first_name || ' ' || last_name || ' ' || "
@@ -820,7 +873,8 @@ async def search_contacts(
     items = await query_db("SELECT * FROM prospects WHERE " + where +
                            " ORDER BY " + order + " LIMIT ? OFFSET ?",
                            tuple(params) + (page_size, (page - 1) * page_size))
-    industries = await query_db("SELECT DISTINCT industry FROM prospects WHERE industry != '' ORDER BY industry")
+    industries = await query_db("SELECT DISTINCT industry FROM prospects WHERE industry != '' "
+                                "AND (? IS NULL OR workspace_id = ?) ORDER BY industry", (ws, ws))
     return {"items": items, "total": total, "page": page, "page_size": page_size,
             "industries": [r["industry"] for r in industries]}
 
@@ -831,27 +885,33 @@ def _state():
 
 
 @app.get("/api/outbox")
-async def get_outbox_api():
-    """Outbox queue + kill-switch state for the Outbox tab."""
+async def get_outbox_api(request: Request):
+    """Outbox queue + kill-switch state for the Outbox tab (the caller's
+    workspace only, in shared mode)."""
     try:
         state = _state()
         await state.init_db()
+        ws = _scope(request)
         return {
             "paused": await state.get_setting("sending_paused"),
             "autopilot": await _autopilot_status(state),
             "pending": await _with_context(
-                state, await state.get_outbox(status="pending_review", limit=100)),
-            "previews": await _preview_status(state),
-            "approved": await state.get_outbox(status="approved", limit=50),
+                state, await state.get_outbox(status="pending_review", limit=100,
+                                              workspace_id=ws)),
+            # Previews are per campaign in the installation's config.
+            "previews": await _preview_status(state) if ws in (None, "local") else [],
+            "approved": await state.get_outbox(status="approved", limit=50, workspace_id=ws),
             "sent": (await query_db(
-                "SELECT * FROM outbox WHERE status = 'sent' "
-                "ORDER BY sent_at DESC LIMIT 25")),
+                "SELECT * FROM outbox WHERE status = 'sent' AND (? IS NULL OR workspace_id = ?) "
+                "ORDER BY sent_at DESC LIMIT 25", (ws, ws))),
             "failed": (await query_db(
                 "SELECT * FROM outbox WHERE status IN ('failed','rejected','cancelled') "
-                "ORDER BY updated_at DESC LIMIT 25")),
-            "needs_check": await state.get_outbox(status="needs_check", limit=50),
-            "sending": await state.get_outbox(status="sending", limit=50),
-            "dead_jobs": await JobStore(state).list(status="dead", limit=25),
+                "AND (? IS NULL OR workspace_id = ?) ORDER BY updated_at DESC LIMIT 25",
+                (ws, ws))),
+            "needs_check": await state.get_outbox(status="needs_check", limit=50,
+                                                  workspace_id=ws),
+            "sending": await state.get_outbox(status="sending", limit=50, workspace_id=ws),
+            "dead_jobs": await JobStore(state).list(status="dead", limit=25, workspace_id=ws),
         }
     except Exception as e:
         return {"error": _failed("Get outbox api", e)}
@@ -1080,11 +1140,11 @@ async def suppressions_export():
 
 
 @app.post("/api/outbox/approve-all")
-async def outbox_approve_all():
+async def outbox_approve_all(request: Request):
     try:
         state = _state()
         await state.init_db()
-        n = await state.approve_outbox()
+        n = await state.approve_outbox(workspace_id=_scope(request))
         return {"success": True, "approved": n}
     except Exception as e:
         return _server_error("Outbox approve all", e)
@@ -1701,6 +1761,31 @@ async def get_runs_api():
         return await state.get_runs(limit=25)
     except Exception as e:
         return {"error": _failed("Get runs api", e)}
+
+
+# ── Identity and audit ──
+
+
+@app.get("/api/me")
+async def whoami(request: Request):
+    from franco import tenancy as T
+
+    p = request.state.principal
+    return {"mode": T.mode(), "user_id": p.user_id, "email": p.email,
+            "workspace_id": p.workspace_id, "role": p.role}
+
+
+@app.get("/api/audit")
+async def audit_log(request: Request, limit: int = Query(100, ge=1, le=500)):
+    """Audit events for the caller's workspace (managers and admins)."""
+    from franco import tenancy as T
+
+    principal = request.state.principal
+    if not principal.holds("audit.read"):
+        return JSONResponse({"success": False, "error": "not allowed"}, status_code=403)
+    state = _state()
+    await state.init_db()
+    return {"events": await T.TenancyStore(state).audit_events(principal.workspace_id, limit)}
 
 
 # ── Capabilities: what can run, what is a preview, and why ──

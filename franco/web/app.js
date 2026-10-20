@@ -143,9 +143,28 @@ function offlineState() {
     'The dashboard process may have stopped. Restart it with <b>franco dashboard</b> and refresh this page.');
 }
 
+// Shared mode (FRANCO_MODE=shared) needs a bearer token from `franco users
+// add`. It lives in this tab's sessionStorage only and is sent as a header,
+// never a cookie, so other sites cannot ride on it. Local mode never asks.
+function authHeaders(opts) {
+  let token = '';
+  try { token = sessionStorage.getItem('franco-token') || ''; } catch { /* blocked */ }
+  if (!token) return opts;
+  const o = Object.assign({}, opts || {});
+  o.headers = Object.assign({}, o.headers || {}, {Authorization: 'Bearer ' + token});
+  return o;
+}
+
 async function api(path, opts) {
   try {
-    const r = await fetch(path, opts);
+    let r = await fetch(path, authHeaders(opts));
+    if (r.status === 401) {
+      const token = prompt('This Franco runs in shared mode. Paste your API token ' +
+                           '(from `franco users add`):');
+      if (!token) return null;
+      try { sessionStorage.setItem('franco-token', token.trim()); } catch { /* blocked */ }
+      r = await fetch(path, authHeaders(opts));
+    }
     if (!r.ok) return null;
     return await r.json();
   } catch {
