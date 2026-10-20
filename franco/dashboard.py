@@ -28,6 +28,7 @@ def _failed(where: str, e: Exception) -> str:
     logger.exception(f"Dashboard: {where} failed: {e}")
     return f"{where} failed; see the dashboard log"
 
+from franco.jobs import JobStore  # noqa: E402
 from franco.paths import PROJECT_ROOT  # noqa: E402
 DB_PATH = PROJECT_ROOT / "data" / "franco.db"
 ENV_FILE = PROJECT_ROOT / ".env"
@@ -796,9 +797,40 @@ async def get_outbox_api():
             "failed": (await query_db(
                 "SELECT * FROM outbox WHERE status IN ('failed','rejected','cancelled') "
                 "ORDER BY updated_at DESC LIMIT 25")),
+            "needs_check": await state.get_outbox(status="needs_check", limit=50),
+            "sending": await state.get_outbox(status="sending", limit=50),
+            "dead_jobs": await JobStore(state).list(status="dead", limit=25),
         }
     except Exception as e:
         return {"error": _failed("Get outbox api", e)}
+
+
+@app.post("/api/outbox/{item_id}/resolve")
+async def outbox_resolve(item_id: str, request: Request):
+    """Settle a send whose delivery could not be confirmed after a crash."""
+    try:
+        action = str((await request.json()).get("action", ""))
+        if action not in ("sent", "resend"):
+            return JSONResponse({"success": False, "message": "action must be sent or resend"},
+                                status_code=400)
+        state = _state()
+        await state.init_db()
+        item = await state.resolve_needs_check(item_id, action)
+        if item is None:
+            return JSONResponse({"success": False, "message":
+                                 "that email is not waiting for a check"}, status_code=409)
+        jobs = JobStore(state)
+        job = await jobs.get_by_key(f"email.send:{item_id}")
+        if job and action == "resend":
+            await jobs.requeue(job["id"])
+        elif job:
+            await jobs.finish(job["id"], job["attempt_count"], "succeeded",
+                              "operator_confirmed", result_ref=item.get("message_id", ""))
+        await state.log_action(action_type="outbox_resolved", agent="dashboard",
+                               details={"id": item_id, "action": action})
+        return {"success": True, "status": item["status"]}
+    except Exception as e:
+        return _server_error("Outbox resolve", e)
 
 
 def _outreach_config():

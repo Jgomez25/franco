@@ -100,6 +100,14 @@ const STATUS = {
   // runs
   running:        ['Running', 'active'],
   stale:          ['Stale', 'bad'],
+  // durable sends and jobs
+  sending:        ['Sending', 'active'],
+  needs_check:    ['Needs check', 'waiting'],
+  queued:         ['Queued', 'active'],
+  leased:         ['In progress', 'active'],
+  retry_wait:     ['Retrying', 'waiting'],
+  succeeded:      ['Done', 'good'],
+  dead:           ['Dead letter', 'bad'],
 };
 
 function statusMeta(status) {
@@ -1093,6 +1101,42 @@ async function loadUsage() {
 // the approval ladder exists to prevent. One email fills the pane; the rest
 // wait in the rail.
 
+// A send interrupted mid-flight whose provider can't say whether it went
+// out. Franco never guesses; the operator checks the Sent folder and decides.
+function renderNeedsCheck(items) {
+  if (!items.length) return '';
+  return '<div class="card" style="border-color:var(--s-wait-line);margin-bottom:16px">' +
+    '<h2>' + items.length + ' email' + (items.length === 1 ? '' : 's') +
+    ' may or may not have sent</h2>' +
+    '<p style="color:var(--text-2);font-size:13px">Franco stopped mid-send and your mail ' +
+    'provider can\'t confirm delivery. Look for each one in your Sent folder, then tell ' +
+    'Franco what you found. It won\'t resend on its own.</p>' +
+    items.map(r => '<div class="row" style="display:flex;gap:8px;align-items:center;' +
+      'flex-wrap:wrap;padding:8px 0;border-top:1px solid var(--border)">' +
+      '<div style="flex:1;min-width:200px"><b>' + escHtml(r.to_email) + '</b> &middot; ' +
+      escHtml(r.subject) + '<div class="muted" style="font-family:var(--mono);font-size:11px">' +
+      escHtml(r.message_id) + '</div></div>' +
+      '<button class="btn btn-secondary btn-sm" onclick="outboxResolve(\'' + escHtml(r.id) +
+      '\', \'sent\')">It was sent</button>' +
+      '<button class="btn btn-secondary btn-sm" onclick="outboxResolve(\'' + escHtml(r.id) +
+      '\', \'resend\')">Not in Sent: send it</button></div>').join('') +
+    '</div>';
+}
+
+async function outboxResolve(id, action) {
+  const ask = action === 'resend'
+    ? 'Only do this if the email is NOT in your Sent folder. Send it again?'
+    : 'Record this email as sent without sending it again?';
+  if (!confirm(ask)) return;
+  const r = await api('/api/outbox/' + encodeURIComponent(id) + '/resolve', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({action}),
+  });
+  showToast(r && r.success ? (action === 'sent' ? 'Recorded as sent' : 'Released to send')
+                           : 'Could not update that email', r && r.success ? 'success' : 'error');
+  loadOutbox();
+}
+
 async function loadOutbox() {
   const data = await api('/api/outbox');
   const banner = document.getElementById('outbox-banner');
@@ -1104,7 +1148,8 @@ async function loadOutbox() {
   const pending = data.pending || [];
   _desk.items = pending;
   if (_desk.i >= pending.length) _desk.i = Math.max(0, pending.length - 1);
-  navCount('nav-outbox', pending.length);
+  const needsCheck = data.needs_check || [];
+  navCount('nav-outbox', pending.length + needsCheck.length);
 
   const auto = data.autopilot || {};
   actions.innerHTML =
@@ -1133,6 +1178,7 @@ async function loadOutbox() {
         '<p style="color:var(--text-2);font-size:13px">' + escHtml(data.paused) +
         '. Approved mail stays queued until you resume.</p></div>'
     : '') +
+    renderNeedsCheck(needsCheck) +
     renderPreviews(data.previews || []) +
     (auto.on
       ? '<div class="card" style="margin-bottom:16px">' +
@@ -1161,6 +1207,10 @@ async function loadOutbox() {
   };
 
   list.innerHTML =
+    table('Sending now', data.sending, [
+      ['To', r => r.to_email], ['Step', r => r.step], ['Subject', r => r.subject],
+      ['Started', r => formatDate(r.updated_at), true],
+    ]) +
     table('Approved &amp; scheduled', data.approved, [
       ['To', r => r.to_email], ['Step', r => r.step], ['Subject', r => r.subject],
       ['Sends', r => formatDate(r.send_at), true],
@@ -1172,6 +1222,11 @@ async function loadOutbox() {
     table('Didn\'t send', data.failed, [
       ['To', r => r.to_email], ['Status', r => badge(r.status), false, true],
       ['Reason', r => r.error, true], ['Updated', r => formatDate(r.updated_at), true],
+    ]) +
+    table('Dead letters', data.dead_jobs, [
+      ['Job', r => r.kind + ' · ' + r.input_ref], ['Attempts', r => r.attempt_count],
+      ['Why', r => (r.error_code ? r.error_code + ': ' : '') + r.error, true],
+      ['Updated', r => formatDate(r.updated_at), true],
     ]);
 }
 

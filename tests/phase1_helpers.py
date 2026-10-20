@@ -64,7 +64,7 @@ class RecordingProvider(MailProvider):
         return True
 
     async def send_email(self, to_email, subject, body, thread_ref="",
-                         in_reply_to="", headers=None):
+                         in_reply_to="", headers=None, message_id=""):
         self.sent.append({"to": to_email, "subject": subject, "body": body,
                           "headers": headers, "in_reply_to": in_reply_to})
         return SendResult(ok=True, message_id=f"<m{len(self.sent)}@x>", thread_ref="t1")

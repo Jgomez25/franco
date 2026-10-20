@@ -24,6 +24,8 @@ from email.utils import make_msgid, parseaddr
 import aiosmtplib
 
 from franco.integrations.mail_provider import (
+    FOUND,
+    UNKNOWN,
     InboundMessage,
     MailProvider,
     SendResult,
@@ -58,13 +60,15 @@ class SmtpImapProvider(MailProvider):
         thread_ref: str = "",
         in_reply_to: str = "",
         headers: dict[str, str] | None = None,
+        message_id: str = "",
     ) -> SendResult:
         persona = self.config.persona
         msg = EmailMessage()
         msg["To"] = to_email
         msg["From"] = f"{persona.name} <{persona.email or self.smtp_user}>"
         msg["Subject"] = subject
-        message_id = make_msgid(domain=(persona.email or self.smtp_user).split("@")[-1])
+        message_id = message_id or make_msgid(
+            domain=(persona.email or self.smtp_user).split("@")[-1])
         msg["Message-ID"] = message_id
         if in_reply_to:
             msg["In-Reply-To"] = in_reply_to
@@ -84,10 +88,54 @@ class SmtpImapProvider(MailProvider):
                 use_tls=(self.smtp_port == 465),
                 timeout=30,
             )
-        except Exception as e:
+        except (aiosmtplib.SMTPConnectError, aiosmtplib.SMTPAuthenticationError,
+                aiosmtplib.SMTPRecipientsRefused, aiosmtplib.SMTPSenderRefused) as e:
+            # Refused before the message was accepted: nothing was sent.
             logger.error(f"SMTP send failed to {to_email}: {e}")
-            return SendResult(ok=False, error=str(e)[:300])
+            return SendResult(ok=False, error=str(e)[:300],
+                              retriable=isinstance(e, aiosmtplib.SMTPConnectError))
+        except Exception as e:
+            # Timeouts and dropped connections can happen after the server
+            # accepted DATA. Delivery is unknown; the sender reconciles.
+            logger.error(f"SMTP send interrupted to {to_email}: {e}")
+            return SendResult(ok=False, error=str(e)[:300], ambiguous=True)
         return SendResult(ok=True, message_id=message_id, thread_ref=message_id)
+
+    SENT_FOLDERS = ("Sent", "Sent Items", "Sent Messages", "[Gmail]/Sent Mail", "INBOX.Sent")
+
+    async def find_sent(self, message_id: str, to_email: str = "",
+                        subject: str = "", since=None) -> str:
+        """FOUND if a Sent folder holds the Message-ID; otherwise UNKNOWN.
+
+        SMTP servers need not keep a sent copy, so not finding it proves
+        nothing, and this adapter never answers ABSENT.
+        """
+        if not message_id:
+            return UNKNOWN
+        loop = asyncio.get_event_loop()
+        try:
+            return await loop.run_in_executor(None, self._search_sent, message_id)
+        except Exception as e:
+            logger.warning(f"IMAP sent-folder search failed: {e}")
+            return UNKNOWN
+
+    def _search_sent(self, message_id: str) -> str:
+        conn = imaplib.IMAP4_SSL(self.imap_host, self.imap_port)
+        try:
+            conn.login(self.imap_user, self.imap_pass)
+            for folder in self.SENT_FOLDERS:
+                status, _ = conn.select(f'"{folder}"', readonly=True)
+                if status != "OK":
+                    continue
+                status, data = conn.search(None, "HEADER", "Message-ID", message_id)
+                if status == "OK" and data and data[0].split():
+                    return FOUND
+            return UNKNOWN
+        finally:
+            try:
+                conn.logout()
+            except Exception:
+                pass
 
     async def get_replies(self, limit: int = 50) -> list[InboundMessage]:
         loop = asyncio.get_event_loop()

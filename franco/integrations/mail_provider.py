@@ -29,6 +29,17 @@ class SendResult:
     message_id: str = ""     # RFC Message-ID (or provider id) of the sent mail
     thread_ref: str = ""     # provider thread handle (Gmail threadId, etc.)
     error: str = ""
+    # The request reached the provider and then failed in a way that leaves
+    # delivery unknown (timeout, dropped connection). Never retry blind:
+    # the sender reconciles with find_sent first.
+    ambiguous: bool = False
+    # A clean failure worth retrying later (rate limit, 5xx before acceptance).
+    retriable: bool = False
+
+
+# What find_sent can say about a message. "unknown" is the honest default:
+# a provider that cannot look its sent mail up must never claim "absent".
+FOUND, ABSENT, UNKNOWN = "found", "absent", "unknown"
 
 
 @dataclass
@@ -121,9 +132,21 @@ class MailProvider(ABC):
         thread_ref: str = "",
         in_reply_to: str = "",
         headers: dict[str, str] | None = None,
+        message_id: str = "",
     ) -> SendResult:
         """Send one plain-text email. Reply threading when refs are given;
-        ``headers`` adds extra ones (e.g. List-Unsubscribe)."""
+        ``headers`` adds extra ones (e.g. List-Unsubscribe). ``message_id``
+        is the RFC Message-ID the caller committed to before sending, so a
+        crash can be reconciled with find_sent."""
+
+    async def find_sent(self, message_id: str, to_email: str = "",
+                        subject: str = "", since=None) -> str:
+        """Was this message sent? FOUND, ABSENT or UNKNOWN (the default).
+
+        Only answer ABSENT when the provider's sent record is authoritative:
+        ABSENT releases the message to be sent again.
+        """
+        return UNKNOWN
 
     @abstractmethod
     async def get_replies(self, limit: int = 50) -> list[InboundMessage]:
