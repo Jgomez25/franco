@@ -451,6 +451,35 @@ class EnvConfig(BaseModel):
     imap_port: int = 993
     imap_username: str = ""
     imap_password: str = ""
+    # Secret name → why it could not be read from the vault (revoked,
+    # expired, locked). Empty when there is no vault or nothing is wrong.
+    credential_problems: dict[str, str] = {}
+
+
+def _vault_fill(values: dict[str, str]) -> dict[str, str]:
+    """Fill empty secret settings from the vault. Returns the problems."""
+    from franco import vault as V
+
+    problems: dict[str, str] = {}
+    store = V.default_vault()
+    if not store.exists():
+        return problems
+    for name in V.SECRET_ENV_KEYS:
+        if values.get(name):
+            continue                       # an explicit .env/env value wins
+        try:
+            values[name] = store.get(name)
+        except V.CredentialMissing:
+            pass
+        except V.CredentialRevoked:
+            problems[name] = "revoked"
+        except V.CredentialExpired:
+            problems[name] = "expired"
+        except V.VaultLocked:
+            problems[name] = "locked"
+        except V.VaultError:
+            problems[name] = "unreadable"
+    return problems
 
 
 def _format_validation_error(e: ValidationError) -> str:
@@ -544,8 +573,19 @@ def load_brain_config(config_path: str | None = None) -> BrainConfig:
 
 
 def load_env() -> EnvConfig:
-    """Load environment variables from .env file."""
+    """Load settings from the environment and .env, and secrets from the
+    vault when one exists. Every secret value is registered for log
+    redaction."""
+    from franco import vault as V
+
     load_dotenv()
+    raw = {name: os.getenv(name, "").strip() for name in V.SECRET_ENV_KEYS}
+    problems = _vault_fill(raw)
+    V.install_redaction()
+    V.register_env_secrets(raw)
+    for name, value in raw.items():
+        if value:
+            os.environ[name] = value       # one source for the getenv calls below
     env = EnvConfig(
         instantly_api_key=os.getenv("INSTANTLY_API_KEY", "").strip(),
         dataforseo_login=os.getenv("DATAFORSEO_LOGIN", "").strip(),
@@ -567,6 +607,7 @@ def load_env() -> EnvConfig:
         imap_port=int(os.getenv("IMAP_PORT", "993").strip() or 993),
         imap_username=os.getenv("IMAP_USERNAME", "").strip(),
         imap_password=os.getenv("IMAP_PASSWORD", "").strip(),
+        credential_problems=problems,
     )
     return env
 

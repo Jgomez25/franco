@@ -725,8 +725,63 @@ async function loadCapabilities() {
     '</tbody></table></div>';
 }
 
+// Credential references from the encrypted vault: names, fingerprints and
+// dates only. Values never reach the browser.
+async function loadSecrets() {
+  const el = document.getElementById('secrets');
+  if (!el) return;
+  const data = await api('/api/secrets');
+  if (!data) {
+    el.innerHTML = '<p class="muted">Couldn\'t read the vault &mdash; the dashboard server ' +
+      'may be stopped. <button class="btn btn-secondary btn-sm" onclick="loadSecrets()">' +
+      'Retry</button></p>';
+    return;
+  }
+  if (!data.vault) {
+    el.innerHTML = '<p class="lede">Secrets are in <span style="font-family:var(--mono);' +
+      'font-size:12px">.env</span> as plaintext. To encrypt them (key kept in your OS ' +
+      'keychain), run <span style="font-family:var(--mono);font-size:12px">franco secrets ' +
+      'migrate</span> in your terminal. It is reversible.</p>';
+    return;
+  }
+  if (data.error) {
+    el.innerHTML = '<p class="muted">The vault exists but could not be read: ' +
+      escHtml(data.error) + '</p>';
+    return;
+  }
+  if (!data.refs.length) {
+    el.innerHTML = '<p class="muted">The vault is empty. Credentials saved above are ' +
+      'stored here, encrypted.</p>';
+    return;
+  }
+  el.innerHTML = '<p class="lede">Encrypted in <span style="font-family:var(--mono);' +
+    'font-size:12px">data/vault.json</span>; the key is in your OS keychain. Revoking ' +
+    'destroys the value; saving it again recovers.</p>' +
+    '<div class="table-card" style="overflow-x:auto"><table><thead><tr><th>Credential</th>' +
+    '<th>State</th><th>Fingerprint</th><th>Rotated</th><th></th></tr></thead><tbody>' +
+    data.refs.map(r => '<tr><td style="font-family:var(--mono);font-size:12px">' +
+      escHtml(r.name) + '</td><td><span class="badge t-' +
+      (r.status === 'active' ? 'good">Active' : 'bad">Revoked') + '</span></td><td class="muted">' +
+      escHtml(r.fingerprint) + '</td><td class="muted">' +
+      escHtml(r.rotated_at || r.created_at || '') + '</td><td>' +
+      (r.status === 'active' ? '<button class="btn btn-secondary btn-sm" ' +
+        'onclick="revokeSecret(\'' + escHtml(r.name) + '\')">Revoke</button>' : '') +
+      '</td></tr>').join('') + '</tbody></table></div>';
+}
+
+async function revokeSecret(name) {
+  if (!confirm('Revoke ' + name + '? Its stored value is destroyed and anything ' +
+               'using it stops until you save a new one.')) return;
+  const r = await api('/api/secrets/' + encodeURIComponent(name) + '/revoke', {method: 'POST'});
+  showToast(r && r.success ? name + ' revoked' : 'Could not revoke ' + name,
+            r && r.success ? 'success' : 'error');
+  loadSecrets();
+  loadCapabilities();
+}
+
 async function loadSettings() {
   loadCapabilities();
+  loadSecrets();
   const data = await api('/api/settings');
   if (!data) return;
 

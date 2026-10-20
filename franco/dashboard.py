@@ -192,12 +192,15 @@ async def get_setup_status():
     # 3. Email provider configured (matches channels.email.provider)
     provider = _current_provider()
 
+    vaulted = _vault_active_names()
+
     def _has(*keys):
-        return all((env_vars.get(k, "") or os.getenv(k, "")).strip() for k in keys)
+        return all((env_vars.get(k, "") or os.getenv(k, "")).strip() or k in vaulted
+                   for k in keys)
 
     if provider == "gmail":
         provider_done = _has("GMAIL_CLIENT_ID", "GMAIL_CLIENT_SECRET") and \
-            (PROJECT_ROOT / "data" / "gmail_token.json").is_file()
+            _gmail_token_present()
         provider_help = ("Set GMAIL_CLIENT_ID/SECRET in Settings, then run "
                          "'franco gmail auth' in your terminal.")
     elif provider == "smtp":
@@ -205,7 +208,8 @@ async def get_setup_status():
         provider_help = "Enter your SMTP host, username, and password in Settings."
     else:
         instantly_key = env_vars.get("INSTANTLY_API_KEY", "") or os.getenv("INSTANTLY_API_KEY", "")
-        provider_done = bool(instantly_key) and instantly_key != "your_instantly_api_key_here"
+        provider_done = (bool(instantly_key) and instantly_key != "your_instantly_api_key_here") \
+            or "INSTANTLY_API_KEY" in vaulted
         provider_help = "Enter your Instantly API key in Settings."
     checks.append({
         "id": "email_provider", "label": f"Email provider configured ({provider})",
@@ -312,11 +316,13 @@ async def get_settings():
         if key not in env_vars:
             env_vars[key] = os.getenv(key, "")
 
-    def is_set(k):
-        return bool((env_vars.get(k) or "").strip())
+    vaulted = _vault_active_names()
 
-    # Gmail is authorized once franco gmail auth has stored a token file.
-    gmail_token = (PROJECT_ROOT / "data" / "gmail_token.json").is_file()
+    def is_set(k):
+        return bool((env_vars.get(k) or "").strip()) or k in vaulted
+
+    # Gmail is authorized once franco gmail auth has stored a token.
+    gmail_token = _gmail_token_present()
 
     return {
         "provider": _current_provider(),
@@ -363,12 +369,58 @@ async def save_env_settings(request: Request):
                 # Strip newlines so a crafted value can't inject extra .env entries
                 updates[key] = str(data[key]).replace("\n", " ").replace("\r", " ").strip()
         if updates:
+            from franco.vault import SECRET_ENV_KEYS, VaultError, default_vault
+
+            store = default_vault()
             try:
+                if store.exists():
+                    # Secrets go to the encrypted vault; .env keeps the name blank.
+                    for key in [k for k in updates if k in SECRET_ENV_KEYS and updates[k]]:
+                        store.put(key, updates.pop(key))
+                        updates[key] = ""
+                        os.environ.pop(key, None)
                 _write_env_file(updates)
+            except VaultError as e:
+                logger.warning("Failed to store a secret in the vault: %s", type(e).__name__)
+                return {"success": False, "message": "Could not store the secret in the "
+                        "vault (is the OS keychain unlocked?)."}
             except Exception as e:
                 logger.warning("Failed to write .env: %s", e)
                 return {"success": False, "message": "Could not write .env file."}
     return {"success": True}
+
+
+@app.get("/api/secrets")
+async def list_secrets():
+    """Credential references (never values) and whether the vault is in use."""
+    from franco.vault import VaultError, default_vault
+
+    store = default_vault()
+    if not store.exists():
+        return {"vault": False, "refs": []}
+    try:
+        return {"vault": True, "refs": store.refs()}
+    except VaultError as e:
+        return {"vault": True, "refs": [], "error": str(e)}
+
+
+@app.post("/api/secrets/{name}/revoke")
+async def revoke_secret(name: str):
+    """Destroy a stored credential. Re-entering it in Settings recovers."""
+    from franco.vault import CredentialMissing, VaultError, default_vault
+
+    store = default_vault()
+    if not store.exists():
+        return JSONResponse({"success": False, "message": "no vault in use"}, status_code=404)
+    try:
+        ref = store.revoke(name)
+    except CredentialMissing:
+        return JSONResponse({"success": False, "message": "no such credential"},
+                            status_code=404)
+    except VaultError as e:
+        return JSONResponse({"success": False, "message": str(e)}, status_code=409)
+    os.environ.pop(name, None)
+    return {"success": True, "ref": ref}
 
 
 @app.post("/api/settings/test-instantly")
@@ -1654,13 +1706,38 @@ async def get_runs_api():
 # ── Capabilities: what can run, what is a preview, and why ──
 
 
+def _vault_active_names() -> set[str]:
+    """Credentials held in the vault. Reads references only: no keychain."""
+    from franco.vault import default_vault
+
+    store = default_vault()
+    try:
+        return {r["name"] for r in store.refs() if r["status"] == "active"} \
+            if store.exists() else set()
+    except Exception:
+        return set()
+
+
+def _gmail_token_present() -> bool:
+    from franco.vault import GMAIL_TOKEN, default_vault
+
+    store = default_vault()
+    if store.exists():
+        try:
+            return any(r["name"] == GMAIL_TOKEN and r["status"] == "active"
+                       for r in store.refs())
+        except Exception:
+            return False
+    return (PROJECT_ROOT / "data" / "gmail_token.json").is_file()
+
+
 def _capability_env() -> dict:
     from franco.capabilities import current_env
 
     env = current_env()
     # A value just saved in Settings counts even before a restart.
     env.update({k.lower(): v for k, v in _read_env_file().items() if v})
-    env["_gmail_token"] = (PROJECT_ROOT / "data" / "gmail_token.json").is_file()
+    env["_gmail_token"] = _gmail_token_present()
     return env
 
 
@@ -1686,7 +1763,8 @@ async def get_capabilities():
     try:
         state = _state()
         await state.init_db()
-        facts = await caps.gather_facts(state, PROJECT_ROOT / "data" / "gmail_token.json")
+        facts = await caps.gather_facts(state)
+        facts["gmail_token"] = env["_gmail_token"]
     except Exception as e:
         # Without health facts the states can only be preview/unavailable/
         # configured; say so instead of implying everything is fine.

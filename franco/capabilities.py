@@ -178,7 +178,10 @@ def evaluate(key: str, env: dict | None = None, facts: dict | None = None,
     missing = [k.upper() for k in cap.env_keys if not str(env.get(k) or "").strip()]
     ready = cap.configured(env) if cap.configured else not missing
     if not ready:
-        return status(UNAVAILABLE, "needs " + (", ".join(missing) or "configuration"))
+        problems = env.get("credential_problems") or {}
+        why = [f"{k} is {problems[k]} in the vault" for k in missing if k in problems]
+        return status(UNAVAILABLE, "; ".join(why) if why else
+                      "needs " + (", ".join(missing) or "configuration"))
     if cap.needs_gmail_token and not facts.get("gmail_token", env.get("_gmail_token")):
         return status(UNAVAILABLE, "run 'franco gmail auth' to create the Gmail token")
 

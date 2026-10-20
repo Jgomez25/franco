@@ -48,18 +48,51 @@ LOOPBACK_PORT = 8765
 TIMEOUT = httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=10.0)
 
 
+def _vault():
+    from franco.vault import default_vault
+
+    store = default_vault()
+    return store if store.exists() else None
+
+
 def _load_token() -> dict | None:
+    """The OAuth token: from the vault once one exists, else the file."""
+    from franco.vault import GMAIL_TOKEN, VaultError, register_secret
+
+    raw = None
+    store = _vault()
     try:
-        if TOKEN_FILE.is_file():
-            data = json.loads(TOKEN_FILE.read_text())
-            if isinstance(data, dict) and data.get("refresh_token"):
-                return data
-    except (OSError, json.JSONDecodeError) as e:
+        if store is not None:
+            raw = store.get(GMAIL_TOKEN)
+        elif TOKEN_FILE.is_file():
+            raw = TOKEN_FILE.read_text()
+    except VaultError as e:
+        logger.warning(f"Gmail token unavailable: {e}")
+        return None
+    except OSError as e:
         logger.warning(f"Could not read Gmail token file: {e}")
+        return None
+    try:
+        data = json.loads(raw) if raw else None
+    except json.JSONDecodeError as e:
+        logger.warning(f"Gmail token is not valid JSON: {e}")
+        return None
+    if isinstance(data, dict) and data.get("refresh_token"):
+        register_secret(data.get("refresh_token"))
+        register_secret(data.get("access_token"))
+        return data
     return None
 
 
 def _save_token(data: dict):
+    from franco.vault import GMAIL_TOKEN, register_secret
+
+    register_secret(data.get("refresh_token"))
+    register_secret(data.get("access_token"))
+    store = _vault()
+    if store is not None:
+        store.put(GMAIL_TOKEN, json.dumps(data))
+        return
     TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
     TOKEN_FILE.write_text(json.dumps(data, indent=2))
     try:
@@ -391,5 +424,6 @@ def run_auth_flow(client_id: str, client_secret: str) -> bool:
         "scope": data.get("scope", SCOPE),
         "obtained_at": int(time.time()),
     })
-    print(f"  ✓ Gmail authorized. Token stored at {TOKEN_FILE}")
+    print("  ✓ Gmail authorized. Token stored "
+          + ("in the encrypted vault" if _vault() is not None else f"at {TOKEN_FILE}"))
     return True

@@ -4,19 +4,47 @@
   "verification": "mocked",
   "commit": "",
   "reviewer": "",
-  "summary": "In progress. Slice 1 of 3 (durable sends) is done. Adds a generic durable job store (migration v13: jobs and job_attempts, unique idempotency keys, compare-and-set claims with leases, exponential backoff, retry budgets, dead letters, requeue). Email dispatch now runs through it: the job lease, outbox 'sending' and a per-item Message-ID are committed before the provider is called. On restart, expired leases are reconciled through the new MailProvider.find_sent (found / absent / unknown), never resent blind; unknown becomes 'needs_check' for the operator, resolvable in the Outbox tab. Slices 2 (encrypted secrets with a keychain-held key; rotation, revocation, redaction) and 3 (workspace, user, membership, roles, audit events, tenant scoping alongside local single-user mode) are not built yet.",
+  "summary": "In progress. Slice 1 of 3 (durable sends) is done. Adds a generic durable job store (migration v13: jobs and job_attempts, unique idempotency keys, compare-and-set claims with leases, exponential backoff, retry budgets, dead letters, requeue). Email dispatch now runs through it: the job lease, outbox 'sending' and a per-item Message-ID are committed before the provider is called. On restart, expired leases are reconciled through the new MailProvider.find_sent (found / absent / unknown), never resent blind; unknown becomes 'needs_check' for the operator, resolvable in the Outbox tab. Slice 2 (secrets) is done: franco/vault.py stores each credential AES-256-GCM encrypted (name bound as AAD) in data/vault.json (0600, atomic writes) with a random 32-byte key kept only in the OS keychain via keyring. Entries are credential references (workspace, fingerprint, created/rotated/revoked/expires). load_env fills secrets from the vault and reports revoked/expired/locked ones, which capability reasons surface. The Gmail OAuth token moves into the vault. A log-record factory redacts every registered secret from every record. Key rotation is crash-recoverable via a key id and backup. 'franco secrets migrate|unmigrate|set|revoke|rotate-key|status', GET /api/secrets and POST /api/secrets/{name}/revoke, and a Settings card. Slice 3 (workspace, user, membership, roles, audit events, tenant scoping alongside local single-user mode) are not built yet.",
   "tests": [
-    {"command": ".venv/bin/python -m pytest tests/test_p01_durable_sends.py -q -p no:cacheprovider", "exit_code": 0, "log": "harness/parity/evidence/logs/P01-durable-sends.log (26 passed)"},
-    {"command": ".venv/bin/python -m pytest tests/test_outbox_native.py tests/test_approved_copy.py tests/test_raad.py tests/test_bounces.py tests/test_replies.py tests/test_autopilot.py tests/test_email_wiring.py tests/test_p00_capabilities.py -q -p no:cacheprovider", "exit_code": 0, "log": "harness/parity/evidence/logs/P01-targeted-1.log (135 passed)"},
-    {"command": ".venv/bin/python -m pytest tests/test_state.py tests/test_state_extra.py tests/test_state_phase1.py tests/test_dashboard_outbox.py tests/test_dashboard_signals.py tests/test_code_scanning_fixes.py tests/test_pipeline.py -q -p no:cacheprovider", "exit_code": 0, "log": "harness/parity/evidence/logs/P01-targeted-2.log (103 passed)"}
+    {
+      "command": ".venv/bin/python -m pytest tests/test_p01_durable_sends.py -q -p no:cacheprovider",
+      "exit_code": 0,
+      "log": "harness/parity/evidence/logs/P01-durable-sends.log (26 passed)"
+    },
+    {
+      "command": ".venv/bin/python -m pytest tests/test_outbox_native.py tests/test_approved_copy.py tests/test_raad.py tests/test_bounces.py tests/test_replies.py tests/test_autopilot.py tests/test_email_wiring.py tests/test_p00_capabilities.py -q -p no:cacheprovider",
+      "exit_code": 0,
+      "log": "harness/parity/evidence/logs/P01-targeted-1.log (135 passed)"
+    },
+    {
+      "command": ".venv/bin/python -m pytest tests/test_state.py tests/test_state_extra.py tests/test_state_phase1.py tests/test_dashboard_outbox.py tests/test_dashboard_signals.py tests/test_code_scanning_fixes.py tests/test_pipeline.py -q -p no:cacheprovider",
+      "exit_code": 0,
+      "log": "harness/parity/evidence/logs/P01-targeted-2.log (103 passed)"
+    },
+    {
+      "command": ".venv/bin/python -m pytest tests/test_p01_vault.py -q -p no:cacheprovider",
+      "exit_code": 0,
+      "log": "harness/parity/evidence/logs/P01-vault.log (12 passed)"
+    },
+    {
+      "command": ".venv/bin/python -m pytest tests/test_config.py tests/test_config_extra.py tests/test_email_wiring.py tests/test_discover.py tests/test_p00_capabilities.py tests/test_p01_durable_sends.py tests/test_p01_vault.py tests/test_code_scanning_fixes.py -q -p no:cacheprovider",
+      "exit_code": 0,
+      "log": "harness/parity/evidence/logs/P01-targeted-3.log (183 passed)"
+    }
   ],
   "criteria": {
-    "P01-A1": {"result": "incomplete", "evidence": "Not built yet (slice 3: tenancy and roles)."},
+    "P01-A1": {
+      "result": "incomplete",
+      "evidence": "Not built yet (slice 3: tenancy and roles)."
+    },
     "P01-A2": {
       "result": "passed",
       "evidence": "tests/test_p01_durable_sends.py with tests/durable_send_worker.py: a real subprocess sends through a file-backed fake provider and SIGKILLs itself (returncode -9) after the provider's durable acknowledgement and before Franco records the send. A second process reconciles: the mailbox still holds exactly 1 message, the outbox row is 'sent' with the same Message-ID, and the job attempt outcome is lease_expired_found. Also covered: kill before acknowledgement (sent exactly once on replay, same Message-ID; a further cycle sends nothing), and kill with an unconfirmable provider (held as needs_check, job dead with code 'unconfirmed', never resent across two recovery cycles). Mocked verification only: Gmail keeping a client-set Message-ID, and Gmail search freshness, have not been exercised against a real or sandbox mailbox."
     },
-    "P01-A3": {"result": "incomplete", "evidence": "Not built yet (slice 2: secrets)."}
+    "P01-A3": {
+      "result": "passed",
+      "evidence": "tests/test_p01_vault.py. Expired: a credential past expires_at raises CredentialExpired; storing a new value recovers it. Revocation: the ciphertext and nonce are deleted from the file (not hidden); get raises CredentialRevoked; load_env reports {'SERPER_API_KEY': 'revoked'} and discovery.serper becomes unavailable with reason 'SERPER_API_KEY is revoked in the vault'; putting a new value recovers. Recovery also covers a key rotation crashed between file rewrite and keychain update (backup restored, values readable). Redaction: after load_env registers vault secrets, formatted args, f-strings and exception tracebacks in log records all show ***REDACTED***; the Gmail refresh token is redacted; /api/secrets, /api/settings, /api/setup-status and /api/capabilities never contain secret values. Plus: no plaintext in the vault file, mode 0600, ciphertexts bound to names, tampering detected, a missing keychain key locks the vault and refuses to orphan stored secrets, the keyring adapter maps backend errors to VaultLocked, and migrate/unmigrate round-trips .env and the token byte for byte. Keychain tests use an in-memory key or a fake keyring backend; the real OS keychain was not exercised by tests."
+    }
   },
   "provider_evidence": [],
   "limitations": [
@@ -24,7 +52,10 @@
     "The SMTP adapter only answers FOUND or UNKNOWN (IMAP Sent-folder search), so any SMTP crash mid-send ends in needs_check for the operator.",
     "The legacy Instantly path (campaign deploy and lead upload) is not on the durable job store.",
     "Confirming a needs_check item as sent from the dashboard does not re-time later sequence steps; they keep their staged schedule.",
-    "Owner decision 2026-10-20: build tenancy anyway, despite the single-operator deployment. The matrix still lists team.roles as excluded and must be updated when slice 3 lands."
+    "Owner decision 2026-10-20: build tenancy anyway, despite the single-operator deployment. The matrix still lists team.roles as excluded and must be updated when slice 3 lands.",
+    "New runtime dependencies cryptography 47.0.0 and keyring 25.7.0 (plus cffi, pycparser, jaraco-*, more-itertools) were added to pyproject, requirements.in and the hashed lock. The lock was regenerated with pip-compile on macOS / Python 3.12 (the documented command uses Python 3.11 via uvx, which is not installed), so keyring's Linux and Windows-only dependencies (SecretStorage/jeepney, pywin32-ctypes) are not in the lock.",
+    "The vault is opt-in: until 'franco secrets migrate' runs, secrets stay in plaintext .env as before. The real macOS Keychain path (KeychainKey against the system keyring) was not exercised by automated tests; macOS may prompt once per process to allow access.",
+    "A test run during development briefly wrote a fake Gmail token to the checkout's data/gmail_token.json (no real token existed there: the file's birth time was the test run). It was deleted, and the vault tests now redirect TOKEN_FILE to a temp path."
   ],
   "required_configuration": []
 }
