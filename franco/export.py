@@ -35,7 +35,8 @@ async def collect_prospects(
 ) -> list[dict]:
     """Fetch prospects matching the filters as export-ready dicts.
 
-    Default view is the *deliverable* list (verified + risky emails).
+    Default view is the *deliverable* list (verified + risky emails, never
+    an address on a reserved test domain).
     ``include_all`` disables every filter for a full dump.
     """
     import aiosqlite
@@ -65,6 +66,12 @@ async def collect_prospects(
         db.row_factory = aiosqlite.Row
         async with db.execute(sql, params) as cursor:
             rows = [dict(r) for r in await cursor.fetchall()]
+
+    if not include_all:
+        # A sequencer-ready list never carries fixture data (reserved test
+        # domains); --all is the raw dump and keeps everything.
+        from franco.fixtures import is_fixture_address
+        rows = [r for r in rows if not is_fixture_address(r.get("email", ""))]
 
     out = []
     for r in rows:

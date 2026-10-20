@@ -18,6 +18,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from franco.brain import Brain
 from franco.config import FrancoConfig, EnvConfig
+from franco.fixtures import is_fixture_address
 from franco.gate import pre_send_check
 from franco.integrations.instantly import InstantlyClient
 from franco.integrations.mail_provider import NATIVE_PROVIDERS, get_mail_provider
@@ -196,6 +197,9 @@ class Sender:
             email = prospect.email.strip().lower()
             if not EMAIL_RE.match(email):
                 logger.warning(f"Sender: Skipping invalid email '{prospect.email}'")
+                continue
+            if is_fixture_address(email):
+                logger.warning(f"Sender: Skipping fixture address '{email}' (reserved test domain)")
                 continue
             if email in seen_emails:
                 continue
@@ -384,6 +388,9 @@ class Sender:
                 continue
             email = prospect.email.strip().lower()
             if not EMAIL_RE.match(email) or email in seen_emails:
+                continue
+            if is_fixture_address(email):
+                logger.warning(f"Sender: not staging fixture address '{email}' (reserved test domain)")
                 continue
             if prospect.status not in SENDABLE_STATUSES:
                 continue

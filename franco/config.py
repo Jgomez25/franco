@@ -490,6 +490,12 @@ def load_config(config_path: str | None = None) -> FrancoConfig:
             f"{config_path} must contain a YAML mapping (key: value pairs), "
             f"got {type(data).__name__}."
         )
+    from franco.fixtures import is_prototype_payload
+    if is_prototype_payload(data):
+        raise ConfigError(
+            f"{config_path} is a blueprint prototype export (simulated data), "
+            "not a Franco configuration. Run 'franco setup' instead."
+        )
 
     try:
         return FrancoConfig(**data)

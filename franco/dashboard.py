@@ -952,6 +952,7 @@ async def import_csv(request: Request):
     """{kind, csv, dry_run, owner} → what was (or would be) imported.
     The browser reads the file and sends its text; nothing is uploaded
     anywhere but this local process."""
+    from franco.fixtures import PrototypeDataError
     from franco.importer import KINDS, default_kind, run_import
     try:
         data = await request.json()
@@ -979,6 +980,8 @@ async def import_csv(request: Request):
                 "imported": report.imported,
                 "rejected": [{"row": n, "why": w} for n, w in report.rejected],
                 "warnings": [{"row": n, "why": w} for n, w in report.warnings]}
+    except PrototypeDataError as e:
+        return JSONResponse({"success": False, "message": str(e)}, status_code=400)
     except Exception as e:
         return _server_error("Import", e)
 
@@ -1242,6 +1245,9 @@ async def start_discovery(request: Request):
             return JSONResponse({"success": False,
                                  "message": f"unknown provider {provider!r}"},
                                 status_code=400)
+        refused = _refuse_unless_executable(f"discovery.{provider}")
+        if refused:
+            return refused
 
         config = load_config()
         queries = _discovery_queries(body, config)
@@ -1611,6 +1617,57 @@ async def get_runs_api():
         return await state.get_runs(limit=25)
     except Exception as e:
         return {"error": _failed("Get runs api", e)}
+
+
+# ── Capabilities: what can run, what is a preview, and why ──
+
+
+def _capability_env() -> dict:
+    from franco.capabilities import current_env
+
+    env = current_env()
+    # A value just saved in Settings counts even before a restart.
+    env.update({k.lower(): v for k, v in _read_env_file().items() if v})
+    env["_gmail_token"] = (PROJECT_ROOT / "data" / "gmail_token.json").is_file()
+    return env
+
+
+def _refuse_unless_executable(key: str) -> JSONResponse | None:
+    """409 with the capability status, before any adapter or request exists."""
+    from franco.capabilities import evaluate
+
+    status = evaluate(key, _capability_env())
+    if status.executable:
+        return None
+    return JSONResponse({"success": False, "capability": status.as_dict(),
+                         "message": f"{status.label} is {status.state}: {status.reason}"},
+                        status_code=409)
+
+
+@app.get("/api/capabilities")
+async def get_capabilities():
+    """Every capability with its state. Reads local files and the database only."""
+    from franco import capabilities as caps
+
+    env = _capability_env()
+    facts, stale_error = {}, ""
+    try:
+        state = _state()
+        await state.init_db()
+        facts = await caps.gather_facts(state, PROJECT_ROOT / "data" / "gmail_token.json")
+    except Exception as e:
+        # Without health facts the states can only be preview/unavailable/
+        # configured; say so instead of implying everything is fine.
+        stale_error = _failed("Read capability health", e)
+    return {
+        "matrix_version": caps.MATRIX_VERSION,
+        "states": list(caps.STATES),
+        "executable_states": sorted(caps.EXECUTABLE),
+        "live_window_days": caps.LIVE_WINDOW_DAYS,
+        "local_only": True,
+        "health_error": stale_error,
+        "capabilities": caps.snapshot(env, facts),
+    }
 
 
 WEB_DIR = (Path(__file__).resolve().parent / "web")
