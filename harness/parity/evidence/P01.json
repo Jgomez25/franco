@@ -1,10 +1,10 @@
 {
   "task_id": "P01",
-  "result": "incomplete",
+  "result": "passed",
   "verification": "mocked",
-  "commit": "",
-  "reviewer": "",
-  "summary": "Three slices. (1) Durable jobs (migration v13: jobs + job_attempts with unique idempotency keys, leased compare-and-set claims, exponential backoff, retry budgets, dead letters, requeue) and crash-safe email dispatch: the job lease, outbox 'sending' and a per-item Message-ID are committed before the provider is called; expired leases are reconciled through MailProvider.find_sent (found / absent / unknown), never resent blind, and unknown becomes 'needs_check' for the operator. (2) Encrypted credential vault: AES-256-GCM per credential (name as AAD) in data/vault.json, key only in the OS keychain via keyring; credential references with fingerprint, rotation, expiry and revocation; crash-recoverable key rotation; secret redaction in the log-record factory; reversible migration from .env; CLI, API and Settings card. (3) Tenancy (migration v14): workspaces, users, memberships (rep/manager/admin), hashed bearer tokens, audit events, and workspace_id on companies, prospects, campaigns, outbox and conversations. Local mode (the default) is unchanged and separately tested. Shared mode (FRANCO_MODE=shared) authenticates tokens and applies a server-side route allowlist with role permissions and workspace ownership checks (another workspace's record answers 404); every unlisted API route is refused; credential management needs admin of the installation workspace; denials and allowed mutations are audited. Owner decisions 2026-10-20: build tenancy anyway; encrypted file plus keychain key; durable sends first. All three acceptance criteria have passing mocked tests; the task stays incomplete until an independent human review.",
+  "commit": "3d1aac0",
+  "reviewer": "Jgomez25 (owner), review stated in chat on 2026-10-20",
+  "summary": "Three slices. (1) Durable jobs (migration v13: jobs + job_attempts with unique idempotency keys, leased compare-and-set claims, exponential backoff, retry budgets, dead letters, requeue) and crash-safe email dispatch: the job lease, outbox 'sending' and a per-item Message-ID are committed before the provider is called; expired leases are reconciled through MailProvider.find_sent (found / absent / unknown), never resent blind, and unknown becomes 'needs_check' for the operator. (2) Encrypted credential vault: AES-256-GCM per credential (name as AAD) in data/vault.json, key only in the OS keychain via keyring; credential references with fingerprint, rotation, expiry and revocation; crash-recoverable key rotation; secret redaction in the log-record factory; reversible migration from .env; CLI, API and Settings card. (3) Tenancy (migration v14): workspaces, users, memberships (rep/manager/admin), hashed bearer tokens, audit events, and workspace_id on companies, prospects, campaigns, outbox and conversations. Local mode (the default) is unchanged and separately tested. Shared mode (FRANCO_MODE=shared) authenticates tokens and applies a server-side route allowlist with role permissions and workspace ownership checks (another workspace's record answers 404); every unlisted API route is refused; credential management needs admin of the installation workspace; denials and allowed mutations are audited. Owner decisions 2026-10-20: build tenancy anyway; encrypted file plus keychain key; durable sends first. Implementation commits a6deb8c, 4f92ff7 and 3d1aac0. All three acceptance criteria have passing tests. Reviewed by the owner on 2026-10-20. Verification remains mocked: no Gmail/SMTP sandbox or real OS keychain was exercised, so this is not live-readiness evidence.",
   "tests": [
     {
       "command": ".venv/bin/python -m pytest tests/test_p01_durable_sends.py -q -p no:cacheprovider",
@@ -70,7 +70,8 @@
     "Provider credentials are installation-wide, not per workspace; vault entries carry workspace_id='local'.",
     "Shared mode re-runs init_db on every API request (a schema check), and the browser keeps the token in sessionStorage; there is no login page, sessions, password reset or SSO.",
     "Exposing the dashboard beyond localhost stays excluded (dashboard.public): shared mode still relies on the host/origin guard and has no TLS of its own.",
-    "Running the CLI during development ('franco users list') migrated the checkout's real data/franco.db from schema v12 to v14. The migrations are additive and the app applies them on its next start anyway; the database held 0 prospects and 0 outbox rows."
+    "Running the CLI during development ('franco users list') migrated the checkout's real data/franco.db from schema v12 to v14. The migrations are additive and the app applies them on its next start anyway; the database held 0 prospects and 0 outbox rows.",
+    "Human review was by the owner (Jgomez25), stated in chat; no second reviewer."
   ],
   "required_configuration": []
 }
